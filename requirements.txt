@@ -4,3 +4,5 @@ uvicorn[standard]
 
 # System monitoring
 psutil
+
+ddgs
