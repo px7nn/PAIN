@@ -1,0 +1,260 @@
+import json
+
+from dataclasses import dataclass
+
+
+class AgentError(Exception):
+    """Raised when agent execution fails"""
+    ...
+
+
+@dataclass
+class AgentResponse:
+    content: str
+    tool_calls: int
+    finish_reason: str | None
+    usage: dict
+
+
+class Agent:
+    def __init__(
+        self,
+        tool_manager,
+        generate,
+        max_tool_rounds: int = 5,
+        max_tool_calls: int = 8,
+        generate_stream=None
+    ):
+        self.tool_manager = tool_manager
+        self.generate = generate
+        self.generate_stream = generate_stream
+
+        self.max_tool_rounds = max_tool_rounds
+        self.max_tool_calls = max_tool_calls
+
+    # --------------------------------------------------
+    # TOOL EXECUTION
+    # --------------------------------------------------
+
+    def _execute_tool(self, tool_call: dict, event_cb=None) -> tuple[str, dict]:
+        call_id = tool_call.get("id")
+
+        try:
+            function = tool_call["function"]
+            name = function["name"]
+            arguments = function["arguments"]
+
+            if isinstance(arguments, str):
+                arguments = json.loads(arguments)
+
+            if not isinstance(arguments, dict):
+                raise ValueError("Arguments must be a JSON object.")
+
+        except (KeyError, TypeError, ValueError) as exc:
+            return call_id, {
+                "ok": False,
+                "error": f"Invalid tool call: {exc}"
+            }
+            
+        if event_cb:
+            event_cb({
+                "type": "tool_start",
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments
+            })
+        
+        result = self.tool_manager.execute(name, arguments)
+        
+        if event_cb:
+            event_cb({
+                "type": "tool_result",
+                "call_id": call_id,
+                "result": result
+            })
+
+        return call_id, result
+
+    # --------------------------------------------------
+    # EXECUTION LOOP
+    # --------------------------------------------------
+
+    def run(
+        self,
+        messages: list[dict],
+        model_name: str,
+        event_cb = None 
+    ) -> AgentResponse:
+        if not isinstance(messages, list) or not messages:
+            raise AgentError("Messages must be a non-empty list.")
+
+        # Copy conversation context
+        messages = json.loads(json.dumps(messages))
+
+        available_tools = self.tool_manager.get_tools()
+
+        total_calls = 0
+
+        for _ in range(self.max_tool_rounds + 1):
+            response = self.generate(
+                messages=messages,
+                model_name=model_name,
+                tools=available_tools
+            )
+
+            assistant = response["message"]
+
+            if not isinstance(assistant, dict):
+                raise AgentError("Invalid assistant message.")
+
+            tool_calls = assistant.get("tool_calls") or []
+
+            # No tool calls: final response
+            if not tool_calls:
+                content = assistant.get("content") or ""
+
+                return AgentResponse(
+                    content=content,
+                    tool_calls=total_calls,
+                    finish_reason=response.get("finish_reason"),
+                    usage=response.get("usage", {})
+                )
+
+            # Preserve assistant tool-call message
+            messages.append({
+                "role": "assistant",
+                "content": assistant.get("content"),
+                "tool_calls": tool_calls
+            })
+
+            # Execute sequentially
+            for tool_call in tool_calls:
+                call_id = tool_call.get("id")
+
+                if total_calls >= self.max_tool_calls:
+                    if not isinstance(call_id, str) or not call_id:
+                        raise AgentError("Tool call has no valid ID.")
+                    result = {
+                        "ok": False,
+                        "error": "Maximum tool-call limit reached."
+                    }
+                else:
+                    call_id, result = self._execute_tool(tool_call, event_cb=event_cb)
+                    total_calls += 1
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(
+                        result,
+                        ensure_ascii=False,
+                        default=str
+                    )
+                })
+
+        raise AgentError("Maximum tool execution rounds reached.")
+
+    # --------------------------------------------------
+    # STREAMING EXECUTION
+    # --------------------------------------------------
+
+    def stream(self, messages: list[dict], model_name: str):
+        if not isinstance(messages, list) or not messages:
+            raise AgentError("Messages must be a non-empty list.")
+
+        if not callable(getattr(self, "generate_stream", None)):
+            raise AgentError("Streaming generation is not configured.")
+
+        messages = json.loads(json.dumps(messages))
+        available_tools = self.tool_manager.get_tools()
+        total_calls = 0
+
+        for _ in range(self.max_tool_rounds + 1):
+            round_content = ""
+            tool_calls = {}
+
+            for chunk in self.generate_stream(
+                messages=messages,
+                model_name=model_name,
+                tools=available_tools
+            ):
+                delta = chunk.get("delta") or {}
+                content = delta.get("content")
+
+                if content:
+                    round_content += content
+                    yield {"type": "token", "content": content}
+
+                for item in delta.get("tool_calls") or []:
+                    index = item.get("index", 0)
+                    current = tool_calls.setdefault(index, {
+                        "id": None,
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""}
+                    })
+
+                    if item.get("id"):
+                        current["id"] = item["id"]
+
+                    function = item.get("function") or {}
+                    if function.get("name"):
+                        current["function"]["name"] += function["name"]
+                    if function.get("arguments"):
+                        current["function"]["arguments"] += function["arguments"]
+
+            if not tool_calls:
+                return
+
+            assembled_calls = [tool_calls[index] for index in sorted(tool_calls)]
+            messages.append({
+                "role": "assistant",
+                "content": round_content or None,
+                "tool_calls": assembled_calls
+            })
+
+            for tool_call in assembled_calls:
+                call_id = tool_call.get("id")
+                if not isinstance(call_id, str) or not call_id:
+                    raise AgentError("Streamed tool call has no valid ID.")
+
+                if total_calls >= self.max_tool_calls:
+                    result = {
+                        "ok": False,
+                        "error": "Maximum tool-call limit reached."
+                    }
+                else:
+                    try:
+                        function = tool_call["function"]
+                        name = function["name"]
+                        arguments = function["arguments"]
+                        if isinstance(arguments, str):
+                            arguments = json.loads(arguments)
+                        if not isinstance(name, str) or not name:
+                            raise ValueError("Invalid tool name.")
+                        if not isinstance(arguments, dict):
+                            raise ValueError("Arguments must be a JSON object.")
+                    except (KeyError, TypeError, ValueError) as exc:
+                        result = {"ok": False, "error": f"Invalid tool call: {exc}"}
+                    else:
+                        yield {
+                            "type": "tool_start",
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": arguments
+                        }
+                        result = self.tool_manager.execute(name, arguments)
+
+                    total_calls += 1
+
+                yield {
+                    "type": "tool_result",
+                    "call_id": call_id,
+                    "result": result
+                }
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(result, ensure_ascii=False, default=str)
+                })
+
+        raise AgentError("Maximum tool execution rounds reached.")

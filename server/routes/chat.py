@@ -66,16 +66,12 @@ def stream_chat(payload: ChatRequest, request: Request):
         yield f"data: {json.dumps(metadata)}\n\n"
 
         try:
-            for token in engine.stream(
+            for event in engine.stream(
                 message=payload.message,
                 conversation_id=conversation_id,
                 model=model_name
             ):
-                event = {
-                    "type": "token",
-                    "content": token
-                }
-                yield f"data: {json.dumps(event)}\n\n"
+                yield f"data: {json.dumps(event, default=str)}\n\n"
             yield 'data: {"type":"done"}\n\n'
 
         except Exception as exc:

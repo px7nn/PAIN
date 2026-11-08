@@ -9,6 +9,9 @@ from core.model_manager import ModelManager
 from core.conversation  import ConversationManager
 from core.context       import ContextManager
 from core.memory        import MemoryManager
+from core.tool_manager  import ToolManager
+from core.tool_loader   import ToolLoader
+from core.agent         import Agent
 
 
 class EngineError(Exception):
@@ -17,9 +20,7 @@ class EngineError(Exception):
 
 
 class Engine:
-
     def __init__(self, cfg: Config = config):
-
         self.config = cfg
 
         # Core components
@@ -27,8 +28,19 @@ class Engine:
         self.conversations = ConversationManager()
         self.memory        = MemoryManager()
 
-        self.context = ContextManager(conversations=self.conversations, cfg=cfg)
+        self.context       = ContextManager(conversations=self.conversations, cfg=cfg)
+        
+        self.tool_manager  = ToolManager()
+        self.tool_loader   = ToolLoader(self.tool_manager)
 
+        self.tool_status = self.tool_loader.load_all()
+        
+        self.agent = Agent(
+            tool_manager=self.tool_manager,
+            generate=self._generate,
+            generate_stream=self._stream_generate
+        )
+        
         # Default model
         self.current_model = cfg.inference.default_model
 
@@ -69,7 +81,12 @@ class Engine:
             "model": self.current_model,
             "inference": self.models.status(),
             "conversations": "available",
-            "memory": "available"
+            "memory": "available",
+            "tools": {
+                "loaded": self.tool_loader.loaded(),
+                "failed": self.tool_loader.failed(),
+                "tools":  self.tool_manager.list_tools()
+            }
         }
 
     # --------------------------------------------------
@@ -148,7 +165,8 @@ class Engine:
     def _generate(
         self,
         messages: list[dict],
-        model_name: str
+        model_name: str,
+        tools: list[dict] | None = None
     ) -> dict:
         inference = self.config.inference
 
@@ -164,7 +182,12 @@ class Engine:
             "max_tokens" : inference.max_tokens,
             "stream"     : False
         }
-
+        if tools:
+            payload["tools"]               = tools
+            payload["tool_choice"]         = "auto"
+            payload["parallel_tool_calls"] = False
+            
+            
         body = json.dumps(payload).encode("utf-8")
 
         request = Request(
@@ -197,24 +220,22 @@ class Engine:
             choice = result["choices"][0]
             message = choice["message"]
 
-            content = message["content"]
-
-            if not isinstance(content, str) or not content.strip():
-                raise EngineError("Model returned an empty response.")
-
+            if not isinstance(message, dict):
+                raise EngineError("Invalid assistant message.")
+            
             return {
-                "content"       : content,
-                "finish_reason" : choice.get("finish_reason"),
-                "usage"         : result.get("usage", {})
+                "message": message,
+                "finish_reason": choice.get("finish_reason"),
+                "usage": result.get("usage", {})
             }
-
         except (KeyError, IndexError, TypeError) as exc:
             raise EngineError("Unexpected llama-server response format.") from exc
         
     def _stream_generate(
         self,
         messages: list[dict],
-        model_name: str
+        model_name: str,
+        tools: list[dict] | None = None
     ):
         inference = self.config.inference
 
@@ -230,6 +251,11 @@ class Engine:
             
             "stream": True
         }
+
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+            payload["parallel_tool_calls"] = False
 
         body = json.dumps(payload).encode("utf-8")
 
@@ -263,13 +289,16 @@ class Engine:
                     choices = chunk.get("choices", [])
 
                     if not choices:
+                        if chunk.get("usage"):
+                            yield {"usage": chunk["usage"]}
                         continue
 
-                    delta = choices[0].get("delta", {})
-                    token = delta.get("content")
-
-                    if token:
-                        yield token
+                    choice = choices[0]
+                    yield {
+                        "delta": choice.get("delta") or {},
+                        "finish_reason": choice.get("finish_reason"),
+                        "usage": chunk.get("usage", {})
+                    }
 
         except HTTPError as exc:
             error_body = exc.read().decode(
@@ -332,7 +361,7 @@ class Engine:
             )
 
             # Generate response
-            result = self._generate(
+            result = self.agent.run(
                 messages=context.messages,
                 model_name=model_name
             )
@@ -341,7 +370,7 @@ class Engine:
             self.conversations.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
-                content=result["content"],
+                content=result.content,
                 model=model_name
             )
 
@@ -349,10 +378,13 @@ class Engine:
                 "conversation_id": conversation_id,
                 
                 "model"    : model_name,
-                "response" : result["content"],
+                "response" : result.content,
                 
-                "finish_reason" : result["finish_reason"],
-                "usage"  : result["usage"],
+                "finish_reason" : result.finish_reason,
+                "usage"  : result.usage,
+                
+                "tool_calls" : result.tool_calls,
+                
                 "context": {
                     "estimated_tokens": context.token_estimate,
                     "budget": context.context_budget,
@@ -374,7 +406,6 @@ class Engine:
                 raise EngineError("Engine is closed.")
 
             model_name = model or self.current_model
-
             self.config.get_model(model_name)
 
             if conversation_id is None:
@@ -383,11 +414,9 @@ class Engine:
                 raise EngineError(f"Conversation not found: {conversation_id}")
 
             self._ensure_model(model_name)
-
-            self.conversations.add_message(conversation_id, "user",message)
+            self.conversations.add_message(conversation_id, "user", message)
 
             memory_context = self._retrieve_memories(message)
-                        
             context = self.context.build(
                 conversation_id=conversation_id,
                 model_name=model_name,
@@ -395,18 +424,21 @@ class Engine:
             )
 
             response_parts = []
+            completed = False
 
             try:
-                for token in self._stream_generate(
-                    context.messages,
-                    model_name
+                for event in self.agent.stream(
+                    messages=context.messages,
+                    model_name=model_name
                 ):
-                    response_parts.append(token)
-                    yield token
+                    if event.get("type") == "token":
+                        response_parts.append(event.get("content", ""))
+                    yield event
+
+                completed = True
 
             finally:
-                # Persist only a completed response
-                if response_parts:
+                if completed and response_parts:
                     self.conversations.add_message(
                         conversation_id,
                         "assistant",

@@ -1,9 +1,12 @@
+// This script is AI-written, has not been verified, and is therefore flagged for verification.
+
 const API = "/api";
 
 let activeConversation = null;
 let activePage = "chat";
 let isGenerating = false;
 let systemTimer = null;
+let activeToolActivities = new Map();
 
 const $ = (id) => document.getElementById(id);
 
@@ -241,6 +244,113 @@ function appendMessage(role, content = "") {
 
 
 // --------------------------------------------------
+// TOOL ACTIVITY
+// --------------------------------------------------
+
+function formatToolData(value) {
+    if (value === undefined || value === null) return "No data";
+
+    if (typeof value === "string") {
+        try {
+            return JSON.stringify(JSON.parse(value), null, 2);
+        } catch {
+            return value;
+        }
+    }
+
+    try {
+        return JSON.stringify(value, null, 2);
+    } catch {
+        return String(value);
+    }
+}
+
+
+function appendToolActivity(name, args = {}, callId = null) {
+    const welcome = document.querySelector(".welcome");
+    if (welcome) welcome.remove();
+
+    const activity = document.createElement("details");
+    activity.className = "tool-activity";
+    activity.open = true;
+
+    const summary = document.createElement("summary");
+    summary.className = "tool-activity-summary";
+
+    const indicator = document.createElement("span");
+    indicator.className = "tool-activity-indicator running";
+
+    const title = document.createElement("span");
+    title.className = "tool-activity-title";
+    title.textContent = `Using ${name || "tool"}`;
+
+    const state = document.createElement("span");
+    state.className = "tool-activity-state";
+    state.textContent = "Running";
+
+    summary.append(indicator, title, state);
+
+    const body = document.createElement("div");
+    body.className = "tool-activity-body";
+
+    const argsLabel = document.createElement("div");
+    argsLabel.className = "tool-activity-label";
+    argsLabel.textContent = "Arguments";
+
+    const argsContent = document.createElement("pre");
+    argsContent.className = "tool-activity-data";
+    argsContent.textContent = formatToolData(args);
+
+    const resultLabel = document.createElement("div");
+    resultLabel.className = "tool-activity-label tool-result-label";
+    resultLabel.textContent = "Result";
+
+    const resultContent = document.createElement("pre");
+    resultContent.className = "tool-activity-data";
+    resultContent.textContent = "Waiting for tool result...";
+
+    body.append(argsLabel, argsContent, resultLabel, resultContent);
+    activity.append(summary, body);
+
+    const container = $("messages");
+    container.appendChild(activity);
+    container.scrollTop = container.scrollHeight;
+
+    const key = callId || `tool-${Date.now()}-${activeToolActivities.size}`;
+    activeToolActivities.set(key, {
+        activity, indicator, state, resultContent
+    });
+
+    return key;
+}
+
+
+function completeToolActivity(callId, result, error = null) {
+    const entry = activeToolActivities.get(callId);
+
+    // If the backend omitted a call ID, complete the most recent pending tool.
+    const target = entry || [...activeToolActivities.values()].reverse().find(
+        item => item.state.textContent === "Running"
+    );
+
+    if (!target) return;
+
+    const failed = Boolean(error) || (
+        result && typeof result === "object" && result.ok === false
+    );
+
+    target.indicator.classList.remove("running");
+    target.indicator.classList.add(failed ? "failed" : "completed");
+    target.state.textContent = failed ? "Failed" : "Completed";
+    target.resultContent.textContent = error
+        ? String(error)
+        : formatToolData(result);
+
+    if (callId) activeToolActivities.delete(callId);
+}
+
+
+// --------------------------------------------------
 // STREAMING CHAT
 // --------------------------------------------------
 
@@ -255,6 +365,7 @@ async function sendMessage(text) {
     appendMessage("user", text);
 
     const assistantBody = appendMessage("assistant", "");
+    activeToolActivities = new Map();
 
     const model = $("model-selector").value;
 
@@ -316,6 +427,28 @@ async function sendMessage(text) {
                 if (data.type === "start") {
 
                     activeConversation = data.conversation_id;
+
+                } else if (
+                    data.type === "tool_start" ||
+                    (data.type === "tool" && data.phase === "start")
+                ) {
+
+                    appendToolActivity(
+                        data.name || data.tool,
+                        data.arguments ?? data.args ?? {},
+                        data.call_id || data.id || null
+                    );
+
+                } else if (
+                    data.type === "tool_result" ||
+                    (data.type === "tool" && data.phase === "result")
+                ) {
+
+                    completeToolActivity(
+                        data.call_id || data.id || null,
+                        data.result,
+                        data.error || null
+                    );
 
                 } else if (data.type === "token") {
 
