@@ -1,0 +1,6 @@
+# API
+fastapi
+uvicorn[standard]
+
+# System monitoring
+psutil

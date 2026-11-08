@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>PAIN</title>
+
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+
+<body>
+
+<div class="app">
+
+    <aside class="sidebar">
+
+        <div class="sidebar-top">
+            <span class="app-name">PAIN</span>
+            <button id="new-chat" class="new-chat">+ New chat</button>
+        </div>
+
+        <div class="conversation-section">
+            <div class="section-label">CONVERSATIONS</div>
+            <div id="conversation-list"></div>
+        </div>
+
+        <nav class="sidebar-nav">
+            <button class="nav-item active" data-page="chat">
+                <span>◫</span> Chat
+            </button>
+
+            <button class="nav-item" data-page="system">
+                <span>▤</span> System
+            </button>
+
+            <button class="nav-item" data-page="settings">
+                <span>⚙</span> Settings
+            </button>
+        </nav>
+
+        <div class="sidebar-footer">
+            <span class="status-dot"></span>
+            <span id="connection-status">Connecting...</span>
+        </div>
+
+    </aside>
+
+
+    <main class="main">
+
+        <header class="topbar">
+
+            <div class="page-title" id="page-title">Chat</div>
+
+            <div class="topbar-right">
+
+                <select id="model-selector">
+                    <option value="PAIN">PAIN · 4B</option>
+                    <option value="PAIN8">PAIN8 · 8B</option>
+                </select>
+
+                <span id="model-status" class="model-status">
+                    Idle
+                </span>
+
+            </div>
+
+        </header>
+
+
+        <!-- CHAT PAGE -->
+
+        <section id="chat-page" class="page active">
+
+            <div id="messages" class="messages">
+
+                <div class="welcome">
+
+                    <h1>What can I help with?</h1>
+
+                    <p>
+                        Your local assistant. Ready when you are.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div class="composer-wrapper">
+
+                <form id="chat-form" class="composer">
+
+                    <textarea
+                        id="message-input"
+                        placeholder="Message PAIN..."
+                        rows="1"
+                        required
+                    ></textarea>
+
+                    <button id="send-button" type="submit">
+                        ↑
+                    </button>
+
+                </form>
+
+                <div class="composer-hint">
+                    Enter to send · Shift + Enter for new line
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- SYSTEM PAGE -->
+
+        <section id="system-page" class="page system-page">
+
+            <div class="system-heading">
+                <div>
+                    <h1>System overview</h1>
+                    <p>Live hardware and resource utilization</p>
+                </div>
+
+                <span id="last-updated">Waiting for data...</span>
+            </div>
+
+
+            <div class="metrics-grid">
+
+                <article class="metric-card">
+
+                    <div class="metric-header">
+                        <span>CPU</span>
+                        <span class="metric-unit">PROCESSOR</span>
+                    </div>
+
+                    <div class="metric-value" id="cpu-value">--%</div>
+
+                    <div class="progress-track">
+                        <div id="cpu-bar" class="progress-fill"></div>
+                    </div>
+
+                    <div class="metric-details" id="cpu-details">
+                        Loading...
+                    </div>
+
+                </article>
+
+
+                <article class="metric-card">
+
+                    <div class="metric-header">
+                        <span>Memory</span>
+                        <span class="metric-unit">RAM</span>
+                    </div>
+
+                    <div class="metric-value" id="ram-value">--%</div>
+
+                    <div class="progress-track">
+                        <div id="ram-bar" class="progress-fill"></div>
+                    </div>
+
+                    <div class="metric-details" id="ram-details">
+                        Loading...
+                    </div>
+
+                </article>
+
+
+                <article class="metric-card">
+
+                    <div class="metric-header">
+                        <span>GPU</span>
+                        <span class="metric-unit">GRAPHICS</span>
+                    </div>
+
+                    <div class="metric-value" id="gpu-value">--</div>
+
+                    <div class="progress-track">
+                        <div id="gpu-bar" class="progress-fill"></div>
+                    </div>
+
+                    <div class="metric-details" id="gpu-details">
+                        Detecting GPU...
+                    </div>
+
+                </article>
+
+
+                <article class="metric-card">
+
+                    <div class="metric-header">
+                        <span>VRAM</span>
+                        <span class="metric-unit">GPU MEMORY</span>
+                    </div>
+
+                    <div class="metric-value" id="vram-value">--</div>
+
+                    <div class="progress-track">
+                        <div id="vram-bar" class="progress-fill"></div>
+                    </div>
+
+                    <div class="metric-details" id="vram-details">
+                        Unavailable
+                    </div>
+
+                </article>
+
+
+                <article class="metric-card">
+
+                    <div class="metric-header">
+                        <span>Disk</span>
+                        <span class="metric-unit">STORAGE</span>
+                    </div>
+
+                    <div class="metric-value" id="disk-value">--%</div>
+
+                    <div class="progress-track">
+                        <div id="disk-bar" class="progress-fill"></div>
+                    </div>
+
+                    <div class="metric-details" id="disk-details">
+                        Loading...
+                    </div>
+
+                </article>
+
+
+                <article class="metric-card">
+
+                    <div class="metric-header">
+                        <span>Swap</span>
+                        <span class="metric-unit">VIRTUAL MEMORY</span>
+                    </div>
+
+                    <div class="metric-value" id="swap-value">--%</div>
+
+                    <div class="progress-track">
+                        <div id="swap-bar" class="progress-fill"></div>
+                    </div>
+
+                    <div class="metric-details" id="swap-details">
+                        Loading...
+                    </div>
+
+                </article>
+
+            </div>
+
+
+            <div class="system-lower-grid">
+
+                <article class="metric-card network-card">
+
+                    <div class="metric-header">
+                        <span>Network</span>
+                        <span class="metric-unit">LIVE TRAFFIC</span>
+                    </div>
+
+                    <div class="network-stats">
+
+                        <div>
+                            <span class="network-label">↓ Download</span>
+                            <strong id="download-value">--</strong>
+                        </div>
+
+                        <div>
+                            <span class="network-label">↑ Upload</span>
+                            <strong id="upload-value">--</strong>
+                        </div>
+
+                    </div>
+
+                </article>
+
+
+                <article class="metric-card hardware-card">
+
+                    <div class="metric-header">
+                        <span>Hardware</span>
+                        <span class="metric-unit">INFORMATION</span>
+                    </div>
+
+                    <div id="hardware-info">
+                        Loading...
+                    </div>
+
+                </article>
+
+            </div>
+
+            <div class="system-note">
+                Metrics refresh every 2 seconds. GPU telemetry depends
+                on operating-system driver support.
+            </div>
+
+        </section>
+
+
+        <!-- SETTINGS PAGE -->
+
+        <section id="settings-page" class="page system-page">
+
+            <div class="system-heading">
+                <div>
+                    <h1>Settings</h1>
+                    <p>PAIN application settings</p>
+                </div>
+            </div>
+
+            <article class="metric-card">
+                <div class="metric-header">
+                    <span>Application</span>
+                </div>
+                <p>Settings will be added here as PAIN develops.</p>
+            </article>
+
+        </section>
+
+    </main>
+
+</div>
+
+<script src="/static/js/app.js"></script>
+
+</body>
+</html>

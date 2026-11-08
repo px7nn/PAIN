@@ -1,0 +1,35 @@
+[app]
+name    = "PAIN"
+version = "0.0.1"
+debug   = true
+
+[paths]
+llama_dir   = "/home/px7nn/main/AI/llama.cpp"
+model_dir   = "/home/px7nn/main/AI/models"
+personality = "/home/px7nn/main/AI/personality"
+data_dir    = "data"
+log_dir     = "logs"
+
+[models.PAIN]
+file         = "Qwen3-4B-Q4_K_M.gguf"
+personality  = "PAIN.txt"
+context_size = 8192
+
+[models.PAIN8]
+file         = "Qwen3-8B-Q4_K_M.gguf"
+personality  = "PAIN8.txt"
+context_size = 8192
+
+[inference]
+default_model = "PAIN"
+threads       = 6
+gpu_layers    = 99
+max_tokens    = 1536
+temperature   = 0.7
+top_p         = 0.8
+top_k         = 20
+min_p         = 0.0
+
+[resources]
+max_concurrent_inference = 1
+max_concurrent_tasks     = 1

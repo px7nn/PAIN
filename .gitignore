@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+
+venv/
+
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+
+# Logs
+logs/*.log
+logs/*.log.*
+
+# Generated model files
+*.gguf
