@@ -11,13 +11,15 @@
 
 <body>
 
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
 <div class="app">
 
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
 
         <div class="sidebar-top">
             <span class="app-name">PAIN</span>
-            <button id="new-chat" class="new-chat">+ New chat</button>
+            <button id="new-chat" class="new-chat" type="button">+ New chat</button>
         </div>
 
         <div class="conversation-section">
@@ -26,21 +28,21 @@
         </div>
 
         <nav class="sidebar-nav">
-            <button class="nav-item active" data-page="chat">
+            <button class="nav-item active" data-page="chat" type="button">
                 <span>◫</span> Chat
             </button>
 
-            <button class="nav-item" data-page="system">
+            <button class="nav-item" data-page="system" type="button">
                 <span>▤</span> System
             </button>
 
-            <button class="nav-item" data-page="settings">
+            <button class="nav-item" data-page="settings" type="button">
                 <span>⚙</span> Settings
             </button>
         </nav>
 
         <div class="sidebar-footer">
-            <span class="status-dot"></span>
+            <span class="status-dot connecting"></span>
             <span id="connection-status">Connecting...</span>
         </div>
 
@@ -51,13 +53,15 @@
 
         <header class="topbar">
 
-            <div class="page-title" id="page-title">Chat</div>
+            <div class="topbar-left">
+                <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Toggle sidebar">☰</button>
+                <div class="page-title" id="page-title">Chat</div>
+            </div>
 
             <div class="topbar-right">
 
-                <select id="model-selector">
-                    <option value="PAIN">PAIN · 4B</option>
-                    <option value="PAIN8">PAIN8 · 8B</option>
+                <select id="model-selector" aria-label="Select model">
+                    <option value="">Loading models...</option>
                 </select>
 
                 <span id="model-status" class="model-status">
@@ -96,10 +100,9 @@
                         id="message-input"
                         placeholder="Message PAIN..."
                         rows="1"
-                        required
                     ></textarea>
 
-                    <button id="send-button" type="submit">
+                    <button id="send-button" type="submit" title="Send message">
                         ↑
                     </button>
 
@@ -308,16 +311,50 @@
             <div class="system-heading">
                 <div>
                     <h1>Settings</h1>
-                    <p>PAIN application settings</p>
+                    <p>PAIN application configuration & management</p>
                 </div>
             </div>
 
-            <article class="metric-card">
-                <div class="metric-header">
-                    <span>Application</span>
-                </div>
-                <p>Settings will be added here as PAIN develops.</p>
-            </article>
+            <div class="metrics-grid">
+
+                <article class="metric-card">
+                    <div class="metric-header">
+                        <span>Application Info</span>
+                        <span class="metric-unit">SYSTEM</span>
+                    </div>
+                    <div class="hardware-card" style="margin-top: 15px;">
+                        <div class="hardware-row"><span>App Name</span><strong id="settings-app-name">PAIN</strong></div>
+                        <div class="hardware-row"><span>Version</span><strong id="settings-app-version">0.1.0</strong></div>
+                        <div class="hardware-row"><span>Backend Status</span><strong id="settings-backend-status">Checking...</strong></div>
+                    </div>
+                </article>
+
+                <article class="metric-card">
+                    <div class="metric-header">
+                        <span>Active Model</span>
+                        <span class="metric-unit">INFERENCE</span>
+                    </div>
+                    <div class="hardware-card" style="margin-top: 15px;">
+                        <div class="hardware-row"><span>Current Model</span><strong id="settings-active-model">--</strong></div>
+                        <div class="hardware-row"><span>Inference Status</span><strong id="settings-inference-status">--</strong></div>
+                        <div class="hardware-row"><span>Context Budget</span><strong id="settings-context-size">--</strong></div>
+                    </div>
+                </article>
+
+                <article class="metric-card">
+                    <div class="metric-header">
+                        <span>Data Management</span>
+                        <span class="metric-unit">CONVERSATIONS</span>
+                    </div>
+                    <div class="settings-actions" style="margin-top: 15px;">
+                        <div class="hardware-row"><span>Total Chats</span><strong id="settings-chat-count">0</strong></div>
+                        <button id="clear-all-conversations" class="danger-btn" type="button" style="margin-top: 15px; width: 100%;">
+                            Clear All Conversations
+                        </button>
+                    </div>
+                </article>
+
+            </div>
 
         </section>
 
