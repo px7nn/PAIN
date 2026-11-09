@@ -1,6 +1,7 @@
 import json
 import math
 import re
+from datetime import datetime
 
 from dataclasses    import dataclass
 from urllib.request import Request, urlopen
@@ -228,6 +229,18 @@ class ContextManager:
         if system_tokens >= budget:
             raise ContextError("Personality exceeds the available context budget.")
 
+        # Real-time environment and calendar context (stable by day to maximize KV-cache reuse)
+        now = datetime.now().astimezone()
+        env_message = {
+            "role": "system",
+            "content": (
+                "[System Environment & Real-Time Context]\n"
+                f"Current Date: {now.strftime('%A, %B %d, %Y')}\n"
+                f"Local Timezone: {now.tzname() or 'Local'} (UTC{now.strftime('%z')})"
+            )
+        }
+        env_tokens = self._message_tokens(env_message)
+
         # Dynamic Tool Schemas Reservation
         tool_tokens = self._tool_tokens(tools)
 
@@ -260,7 +273,7 @@ class ContextManager:
         
         # Reserve headroom for multi-round agent tool calls (e.g. 600 tokens)
         agent_working_headroom = 600 if tools else 0
-        static_overhead = system_tokens + tool_tokens + memory_tokens + agent_working_headroom
+        static_overhead = system_tokens + env_tokens + tool_tokens + memory_tokens + agent_working_headroom
 
         available_for_history = budget - static_overhead
         if available_for_history < 400:
@@ -317,10 +330,11 @@ class ContextManager:
         # Assemble Final Ordered Context Window
         # Ordering preserves KV cache:
         # [0]: Immutable root personality (100% static)
-        # [1]: Stored reference memory (if any)
-        # [2]: Earlier conversation summary (if any)
-        # [3..N]: Recent verbatim user and assistant turns
-        assembled_messages: list[dict] = [root_system_message]
+        # [1]: Real-time environment and calendar context (stable by day)
+        # [2]: Stored reference memory (if any)
+        # [3]: Earlier conversation summary (if any)
+        # [4..N]: Recent verbatim user and assistant turns
+        assembled_messages: list[dict] = [root_system_message, env_message]
 
         if memory_message:
             assembled_messages.append(memory_message)
@@ -332,6 +346,7 @@ class ContextManager:
 
         total_estimated = (
             system_tokens +
+            env_tokens +
             tool_tokens +
             memory_tokens +
             summary_tokens +

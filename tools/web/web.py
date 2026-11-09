@@ -72,14 +72,19 @@ _wF = WebFunctions()
 def register(tool_manager: ToolManager):
     tool_manager.register(
         name = "web_search",
-        description = ("Search the web for information and recent developments."),
+        description = (
+            "Search the web for real-time information, news, holidays, festivals, and external facts. "
+            "Always convert relative dates (e.g., 'yesterday', 'tomorrow') into absolute calendar dates "
+            "(e.g., 'November 8 2026') and include regional context (e.g., 'India') when applicable."
+        ),
         parameters = {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
                     "description": (
-                        "Search query."
+                        "Specific search terms. Use absolute dates (e.g., 'November 8 2026') rather than "
+                        "relative phrases like 'yesterday' or 'today'."
                     )
                 }
             },
