@@ -28,7 +28,11 @@ class Engine:
         self.conversations = ConversationManager()
         self.memory        = MemoryManager()
 
-        self.context       = ContextManager(conversations=self.conversations, cfg=cfg)
+        self.context       = ContextManager(
+            conversations=self.conversations,
+            cfg=cfg,
+            models=self.models
+        )
         
         self.tool_manager  = ToolManager()
         self.tool_loader   = ToolLoader(self.tool_manager)
@@ -95,50 +99,33 @@ class Engine:
     
     def _retrieve_memories(
         self,
-        query: str,
-        max_memories: int = 8
+        query: str = "",
+        max_memories: int = 2
     ) -> str:
-        # Retrieve pinned memories
-        pinned = self.memory.list(limit=100)
+        """Retrieve only high-priority pinned memories for baseline continuity.
+        Dynamic contextual recall is handled on-demand via the search_memory tool."""
+        try:
+            pinned = self.memory.list(limit=10)
+            selected = [
+                m for m in pinned
+                if m.get("pinned") and m.get("importance", 0) >= 4
+            ][:max_memories]
 
-        # Retrieve memories related to the current message
-        relevant = self.memory.search(
-            query=query,
-            limit=20
-        )
+            if not selected:
+                return ""
 
-        selected = {}
-        
-        # Reserve space for important pinned memories
-        for item in pinned:
-            if item["pinned"]:
-                selected[item["id"]] = item
-            if len(selected) >= 3:
-                break
+            sections = []
+            total_chars = 0
+            for item in selected:
+                snippet = f"[{item['category']}] {item['content']}"
+                if total_chars + len(snippet) > 300:
+                    break
+                sections.append(snippet)
+                total_chars += len(snippet)
 
-        # Add relevant memories without duplicates
-        for item in relevant:
-            selected[item["id"]] = item
-
-        # Prioritize pinned and important memories
-        memories = sorted(
-            selected.values(),
-            key=lambda item: (
-                item["pinned"],
-                item["importance"]
-            ),
-            reverse=True
-        )[:max_memories]
-
-        if not memories:
+            return "\n".join(sections)
+        except Exception:
             return ""
-
-        sections = []
-
-        for item in memories:
-            sections.append(f"[{item['category']}] {item['content']}")
-
-        return "\n".join(sections)
 
     def create_conversation(
         self,
@@ -353,11 +340,13 @@ class Engine:
 
             # Construct context
             memory_context = self._retrieve_memories(message)
-            
+            available_tools = self.tool_manager.get_tools()
+
             context = self.context.build(
                 conversation_id=conversation_id,
                 model_name=model_name,
-                memory_context=memory_context
+                memory_context=memory_context,
+                tools=available_tools
             )
 
             # Generate response
@@ -417,10 +406,13 @@ class Engine:
             self.conversations.add_message(conversation_id, "user", message)
 
             memory_context = self._retrieve_memories(message)
+            available_tools = self.tool_manager.get_tools()
+
             context = self.context.build(
                 conversation_id=conversation_id,
                 model_name=model_name,
-                memory_context=memory_context
+                memory_context=memory_context,
+                tools=available_tools
             )
 
             response_parts = []

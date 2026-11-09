@@ -1,11 +1,40 @@
 import json
 
 from dataclasses import dataclass
+from typing      import Any
 
 
 class AgentError(Exception):
     """Raised when agent execution fails"""
     ...
+
+
+def format_tool_content(result: Any, max_chars: int = 2400) -> str:
+    """Format and govern tool output length to prevent context explosion"""
+    serialized = json.dumps(result, ensure_ascii=False, default=str)
+    if len(serialized) <= max_chars:
+        return serialized
+
+    if isinstance(result, dict) and "result" in result:
+        inner = result["result"]
+        if isinstance(inner, str):
+            truncated = inner[:max_chars - 120] + "\n... [Truncated to fit context budget] ..."
+            return json.dumps({
+                "ok": result.get("ok", True),
+                "tool": result.get("tool"),
+                "result": truncated,
+                "_truncated": True
+            }, ensure_ascii=False)
+        elif isinstance(inner, list):
+            return json.dumps({
+                "ok": result.get("ok", True),
+                "tool": result.get("tool"),
+                "result": inner[:8],
+                "_truncated": True,
+                "_original_count": len(inner)
+            }, ensure_ascii=False)
+
+    return serialized[:max_chars - 60] + "... [Truncated to fit context budget] ..."
 
 
 @dataclass
@@ -144,11 +173,7 @@ class Agent:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": json.dumps(
-                        result,
-                        ensure_ascii=False,
-                        default=str
-                    )
+                    "content": format_tool_content(result)
                 })
 
         raise AgentError("Maximum tool execution rounds reached.")
@@ -254,7 +279,7 @@ class Agent:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call_id,
-                    "content": json.dumps(result, ensure_ascii=False, default=str)
+                    "content": format_tool_content(result)
                 })
 
         raise AgentError("Maximum tool execution rounds reached.")

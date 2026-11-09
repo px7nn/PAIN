@@ -56,6 +56,7 @@ class ConversationManager:
 
                     id          INTEGER PRIMARY KEY AUTOINCREMENT,
                     title       TEXT NOT NULL DEFAULT 'New conversation',
+                    summary     TEXT,
 
                     created_at  TEXT NOT NULL,
                     updated_at  TEXT NOT NULL
@@ -87,6 +88,11 @@ class ConversationManager:
 
                 ON messages(conversation_id, id);
             """)
+
+            # Ensure summary column exists in existing databases
+            cols = [row[1] for row in self.conn.execute("PRAGMA table_info(conversations)").fetchall()]
+            if "summary" not in cols:
+                self.conn.execute("ALTER TABLE conversations ADD COLUMN summary TEXT")
 
             self.conn.commit()
 
@@ -173,6 +179,31 @@ class ConversationManager:
                 DELETE FROM conversations
                 WHERE id = ?
             """, (conversation_id,))
+
+            self.conn.commit()
+
+            if cursor.rowcount == 0:
+                raise ConversationError(
+                    f"Conversation not found: {conversation_id}"
+                )
+
+    def get_summary(self, conversation_id: int) -> str | None:
+        with self.lock:
+            row = self.conn.execute("""
+                SELECT summary
+                FROM conversations
+                WHERE id = ?
+            """, (conversation_id,)).fetchone()
+
+            return row["summary"] if row and row["summary"] else None
+
+    def update_summary(self, conversation_id: int, summary: str | None):
+        with self.lock:
+            cursor = self.conn.execute("""
+                UPDATE conversations
+                SET summary = ?, updated_at = ?
+                WHERE id = ?
+            """, (summary, self._timestamp(), conversation_id))
 
             self.conn.commit()
 

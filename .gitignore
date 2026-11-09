@@ -15,3 +15,5 @@ logs/*.log.*
 
 # Generated model files
 *.gguf
+
+tests/

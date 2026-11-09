@@ -3,12 +3,37 @@
 import sqlite3
 import threading
 import json
+import re
 
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
 from core.config import config
+
+
+# Standard English stopwords to filter out meaningless search queries
+STOPWORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and",
+    "any", "are", "aren't", "as", "at", "be", "because", "been", "before", "being",
+    "below", "between", "both", "but", "by", "can", "can't", "cannot", "could",
+    "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't", "down",
+    "during", "each", "few", "for", "from", "further", "had", "hadn't", "has",
+    "hasn't", "have", "haven't", "having", "he", "he'd", "he'll", "he's", "her",
+    "here", "here's", "hers", "herself", "him", "himself", "his", "how", "how's",
+    "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "isn't", "it",
+    "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my",
+    "myself", "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other",
+    "ought", "our", "ours", "ourselves", "out", "over", "own", "same", "shan't",
+    "she", "she'd", "she'll", "she's", "should", "shouldn't", "so", "some", "such",
+    "than", "that", "that's", "the", "their", "theirs", "them", "themselves", "then",
+    "there", "there's", "these", "they", "they'd", "they'll", "they're", "they've",
+    "this", "those", "through", "to", "too", "under", "until", "up", "very", "was",
+    "wasn't", "we", "we'd", "we'll", "we're", "we've", "were", "weren't", "what",
+    "what's", "when", "when's", "where", "where's", "which", "while", "who", "who's",
+    "whom", "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd",
+    "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
+}
 
 
 class MemoryError(Exception):
@@ -98,6 +123,41 @@ class MemoryManager:
                     idx_memories_importance
                 ON memories(importance DESC)
             """)
+
+            # Full-Text Search (FTS5) for semantic keyword ranking
+            try:
+                self.conn.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                        content,
+                        category,
+                        content='memories',
+                        content_rowid='id',
+                        tokenize='porter unicode61'
+                    )
+                """)
+
+                self.conn.executescript("""
+                    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+                        INSERT INTO memories_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+                        INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES('delete', old.id, old.content, old.category);
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+                        INSERT INTO memories_fts(memories_fts, rowid, content, category) VALUES('delete', old.id, old.content, old.category);
+                        INSERT INTO memories_fts(rowid, content, category) VALUES (new.id, new.content, new.category);
+                    END;
+                """)
+
+                # Sync any existing rows into FTS5
+                self.conn.execute("""
+                    INSERT INTO memories_fts(rowid, content, category)
+                    SELECT id, content, category FROM memories
+                    WHERE id NOT IN (SELECT rowid FROM memories_fts)
+                """)
+            except sqlite3.OperationalError:
+                # Fallback gracefully if FTS5 module is not compiled in sqlite
+                pass
 
             self.conn.commit()
 
@@ -268,44 +328,76 @@ class MemoryManager:
         if category is not None:
             self._validate_category(category)
 
-        terms = query.strip().split()
+        # Extract words and filter out stopwords
+        raw_words = re.findall(r"\b[a-zA-Z0-9_\-\u0080-\uffff]+\b", query.lower())
+        filtered_terms = [
+            w for w in raw_words
+            if w not in STOPWORDS and len(w) > 1
+        ]
 
-        conditions = []
-        params = []
-
-        for term in terms:
-
-            conditions.append("content LIKE ?")
-            params.append(f"%{term}%")
-
-        sql = f"""
-            SELECT *
-            FROM memories
-            WHERE ({" OR ".join(conditions)})
-        """
-
-        if category is not None:
-            sql += " AND category = ?"
-            params.append(category)
-
-        sql += """
-            ORDER BY pinned DESC, importance DESC, updated_at DESC
-            LIMIT ?
-        """
-
-        params.append(limit)
+        # If query only contained stopwords (e.g. "What is it?", "Hello there"),
+        # do NOT match arbitrary memories. Return empty list immediately.
+        if not filtered_terms:
+            return []
 
         with self.lock:
+            # 1. Try FTS5 ranked search
+            try:
+                # Build safe FTS5 MATCH expression
+                safe_terms = [f'"{re.sub(r"[^\w\-]", "", term)}"*' for term in filtered_terms if term]
+                if safe_terms:
+                    match_expr = " OR ".join(safe_terms)
 
-            rows = self.conn.execute(
-                sql,
-                params
-            ).fetchall()
+                    sql = """
+                        SELECT m.*, bm25(memories_fts) AS rank
+                        FROM memories m
+                        JOIN memories_fts ON m.id = memories_fts.rowid
+                        WHERE memories_fts MATCH ?
+                    """
+                    params: list[Any] = [match_expr]
 
-            return [
-                self._deserialize(row)
-                for row in rows
-            ]
+                    if category is not None:
+                        sql += " AND m.category = ?"
+                        params.append(category)
+
+                    sql += """
+                        ORDER BY m.pinned DESC, rank ASC, m.importance DESC
+                        LIMIT ?
+                    """
+                    params.append(limit)
+
+                    rows = self.conn.execute(sql, params).fetchall()
+                    if rows:
+                        return [self._deserialize(row) for row in rows]
+            except sqlite3.OperationalError:
+                pass
+
+            # 2. Fallback to SQL LIKE search if FTS5 fails
+            conditions = []
+            params = []
+
+            for term in filtered_terms:
+                conditions.append("content LIKE ?")
+                params.append(f"%{term}%")
+
+            sql = f"""
+                SELECT *
+                FROM memories
+                WHERE ({" OR ".join(conditions)})
+            """
+
+            if category is not None:
+                sql += " AND category = ?"
+                params.append(category)
+
+            sql += """
+                ORDER BY pinned DESC, importance DESC, updated_at DESC
+                LIMIT ?
+            """
+            params.append(limit)
+
+            rows = self.conn.execute(sql, params).fetchall()
+            return [self._deserialize(row) for row in rows]
 
     # --------------------------------------------------
     # UPDATE
@@ -462,6 +554,7 @@ class MemoryManager:
 
         result["tags"] = json.loads(result["tags"])
         result["pinned"] = bool(result["pinned"])
+        result.pop("rank", None)
 
         return result
 
