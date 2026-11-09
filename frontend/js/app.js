@@ -116,63 +116,249 @@ async function api(path, options = {}) {
 
 
 // --------------------------------------------------
-// MARKDOWN RENDERING
+// MARKDOWN & SYNTAX HIGHLIGHTING ENGINE
 // --------------------------------------------------
 
-function renderMarkdown(text) {
-    if (!text) return "";
+function setupMarkdownParser() {
+    if (!window.marked) return;
 
-    const codeBlocks = [];
+    const renderer = new marked.Renderer();
 
-    // Extract code blocks (closed or open at stream end)
-    let processed = text.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(?:```|$)/g, (match, lang, code) => {
-        const id = `___CODE_BLOCK_${codeBlocks.length}___`;
-        codeBlocks.push({
-            lang: lang.trim() || "code",
-            code: code.replace(/\n$/, "")
-        });
-        return id;
-    });
+    // 1. Code blocks: Syntax highlighting + language badge + copy button
+    // Handles both marked v12+ token object { text, lang, escaped } and older positional (code, language)
+    renderer.code = function(codeArg, languageArg) {
+        let code = '';
+        let language = '';
 
-    // Escape HTML characters to protect against XSS
-    processed = escapeHtml(processed);
+        if (typeof codeArg === 'object' && codeArg !== null) {
+            code = codeArg.text || '';
+            language = codeArg.lang || '';
+        } else {
+            code = String(codeArg || '');
+            language = String(languageArg || '');
+        }
 
-    // Inline code: `code`
-    processed = processed.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+        const lang = (language || '').trim().toLowerCase();
+        let highlighted;
 
-    // Bold: **text** or __text__
-    processed = processed.replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
-    processed = processed.replace(/__([^_\n]+)__/g, "<strong>$1</strong>");
+        if (window.hljs && lang && hljs.getLanguage(lang)) {
+            try {
+                highlighted = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+            } catch (e) {
+                highlighted = escapeHtml(code);
+            }
+        } else if (window.hljs && code.length < 40000) {
+            try {
+                const auto = hljs.highlightAuto(code);
+                highlighted = auto.value;
+            } catch (e) {
+                highlighted = escapeHtml(code);
+            }
+        } else {
+            highlighted = escapeHtml(code);
+        }
 
-    // Italic: *text* or _text_
-    processed = processed.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-    processed = processed.replace(/(?<!\w)_([^_\n]+)_(?!\w)/g, "<em>$1</em>");
+        const encodedCode = encodeURIComponent(code);
+        const displayLang = lang || 'code';
 
-    // Blockquotes: > quote
-    processed = processed.replace(/^>\s+(.+)$/gm, "<blockquote>$1</blockquote>");
-
-    // Unordered lists
-    processed = processed.replace(/^[\*\-]\s+(.+)$/gm, "<li>$1</li>");
-    processed = processed.replace(/((?:<li>.*?<\/li>\s*)+)/gs, "<ul>$1</ul>");
-
-    // Reinsert code blocks
-    codeBlocks.forEach((block, idx) => {
-        const placeholder = `___CODE_BLOCK_${idx}___`;
-        const escapedCode = escapeHtml(block.code);
-        const encodedCode = encodeURIComponent(block.code);
-        const html = `
+        return `
             <div class="code-block">
                 <div class="code-header">
-                    <span class="code-lang">${escapeHtml(block.lang)}</span>
-                    <button class="copy-code-btn" type="button" data-code="${encodedCode}">Copy</button>
+                    <div class="code-lang-tag">
+                        <svg class="code-tag-icon" viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2.2" fill="none"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                        <span class="code-lang-name">${escapeHtml(displayLang)}</span>
+                    </div>
+                    <button class="copy-code-btn" type="button" data-code="${encodedCode}" title="Copy code snippet">
+                        <svg class="copy-icon" viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                        <span class="copy-text">Copy</span>
+                    </button>
                 </div>
-                <pre class="code-content"><code>${escapedCode}</code></pre>
+                <pre class="code-content"><code class="hljs ${escapeHtml(displayLang)}">${highlighted}</code></pre>
             </div>
         `;
-        processed = processed.replace(placeholder, html);
+    };
+
+    // 2. Hyperlinks: [text](url) -> Clickable, safe, external icon
+    // Handles both marked v12+ token object { href, title, tokens } and positional (href, title, text)
+    renderer.link = function(hrefArg, titleArg, textArg) {
+        let href = '';
+        let title = '';
+        let text = '';
+
+        if (typeof hrefArg === 'object' && hrefArg !== null) {
+            href = hrefArg.href || '';
+            title = hrefArg.title || '';
+            text = (this.parser && hrefArg.tokens)
+                ? this.parser.parseInline(hrefArg.tokens)
+                : (hrefArg.text || hrefArg.raw || '');
+        } else {
+            href = String(hrefArg || '');
+            title = String(titleArg || '');
+            text = String(textArg || '');
+        }
+
+        const cleanHref = href.trim();
+        const isSafe = /^(https?:\/\/|mailto:|\/|#)/i.test(cleanHref);
+        const safeHref = isSafe ? cleanHref : '#';
+        const titleAttr = title ? ` title="${escapeHtml(title)}"` : '';
+
+        return `<a href="${escapeHtml(safeHref)}" target="_blank" rel="noopener noreferrer"${titleAttr} class="markdown-link">${text}<svg class="external-icon" viewBox="0 0 24 24" width="10" height="10" stroke="currentColor" stroke-width="2.2" fill="none"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg></a>`;
+    };
+
+    // 3. Inline codespan: handles both token object and string
+    renderer.codespan = function(codeArg) {
+        const text = (typeof codeArg === 'object' && codeArg !== null) ? (codeArg.text || '') : String(codeArg || '');
+        return `<code class="inline-code">${escapeHtml(text)}</code>`;
+    };
+
+    // 4. Tables: Responsive wrapper
+    // Handles marked v12+ token object vs positional (header, body)
+    renderer.table = function(headerArg, bodyArg) {
+        if (typeof headerArg === 'object' && headerArg !== null && !bodyArg) {
+            const defaultTableHtml = marked.Renderer.prototype.table.call(this, headerArg);
+            return `<div class="table-wrapper">${defaultTableHtml}</div>`;
+        }
+        return `<div class="table-wrapper"><table class="markdown-table"><thead>${headerArg}</thead><tbody>${bodyArg}</tbody></table></div>`;
+    };
+
+    marked.setOptions({
+        renderer: renderer,
+        gfm: true,
+        breaks: true
+    });
+}
+
+// Initialize on script execution
+setupMarkdownParser();
+
+function renderMathExpression(expr, displayMode = false) {
+    if (window.katex && typeof window.katex.renderToString === "function") {
+        try {
+            return window.katex.renderToString(expr, {
+                displayMode: displayMode,
+                throwOnError: true,
+                strict: false
+            });
+        } catch (e) {
+            // Parse error or invalid LaTeX expression - fallback to styled placeholder
+        }
+    }
+    const safe = escapeHtml(expr);
+    return displayMode
+        ? `<div class="katex-display"><code class="math-placeholder">$$${safe}$$</code></div>`
+        : `<code class="math-placeholder">$${safe}$</code>`;
+}
+
+function extractMathAndPlaceholders(text) {
+    if (!text) return { text: "", blocks: [], inlines: [] };
+
+    const blocks = [];
+    const inlines = [];
+    const codes = [];
+
+    // 1. Temporarily shield multi-line and inline code blocks so backticks and internal $ are preserved
+    let shielded = text.replace(/```[\s\S]*?```/g, (m) => {
+        codes.push(m);
+        return `%%%CODE_PLACEHOLDER_${codes.length - 1}%%%`;
+    }).replace(/`[^`\n]+`/g, (m) => {
+        codes.push(m);
+        return `%%%CODE_PLACEHOLDER_${codes.length - 1}%%%`;
     });
 
-    return processed;
+    // 2. Extract display/block math: $$...$$
+    shielded = shielded.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
+        blocks.push(expr.trim());
+        return `%%%MATH_BLOCK_${blocks.length - 1}%%%`;
+    });
+
+    // 3. Extract inline math / placeholders: $...$
+    // Exclude currency ranges like "$10 to $20" or "$50 and $100"
+    shielded = shielded.replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, (m, expr) => {
+        const trimmed = expr.trim();
+        if (!trimmed) return m;
+
+        // Skip currency descriptions like "$10 to" or "$50 and"
+        if (/^\d+(\.\d+)?\s*(?:and|or|to|,|-)\s*$/i.test(trimmed)) {
+            return m;
+        }
+
+        inlines.push(trimmed);
+        return `%%%MATH_INLINE_${inlines.length - 1}%%%`;
+    });
+
+    // 4. Restore shielded code blocks
+    shielded = shielded.replace(/%%%CODE_PLACEHOLDER_(\d+)%%%/g, (_, idx) => codes[Number(idx)]);
+
+    return { text: shielded, blocks, inlines };
+}
+
+function prepareStreamingMarkdown(text) {
+    if (!text) return "";
+
+    // Count triple backtick occurrences
+    const fenceMatches = text.match(/```/g);
+    const fenceCount = fenceMatches ? fenceMatches.length : 0;
+
+    // If unclosed code fence at stream end, append closing fence temporarily
+    let prepared = text;
+    if (fenceCount % 2 !== 0) {
+        prepared = prepared + "\n```";
+    }
+
+    return prepared;
+}
+
+function fallbackMarkdown(text) {
+    if (!text) return "";
+    let safe = escapeHtml(text);
+
+    // Code blocks
+    safe = safe.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, function(_, lang, code) {
+        return `<div class="code-block"><pre class="code-content"><code class="hljs ${lang}">${code}</code></pre></div>`;
+    });
+
+    // Hyperlinks [text](url)
+    safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s\)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="markdown-link">$1</a>');
+    // Bold **text**
+    safe = safe.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // Italic *text*
+    safe = safe.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    // Inline code `code`
+    safe = safe.replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>');
+    // Blockquote
+    safe = safe.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+    // Unordered lists
+    safe = safe.replace(/^[\*\-]\s+(.+)$/gm, '<li>$1</li>');
+    safe = safe.replace(/((?:<li>.*?<\/li>\s*)+)/gs, '<ul>$1</ul>');
+    return safe;
+}
+
+function renderMarkdown(text, isStreaming = false) {
+    if (!text) return "";
+
+    const raw = isStreaming ? prepareStreamingMarkdown(text) : text;
+    const { text: cleanText, blocks, inlines } = extractMathAndPlaceholders(raw);
+
+    let html = "";
+    if (window.marked && typeof window.marked.parse === "function") {
+        try {
+            html = window.marked.parse(cleanText);
+        } catch (err) {
+            console.error("marked parse error:", err);
+            html = fallbackMarkdown(cleanText);
+        }
+    } else {
+        html = fallbackMarkdown(cleanText);
+    }
+
+    // Unwrap paragraph around standalone display math blocks
+    html = html.replace(/<p>\s*(%%%MATH_BLOCK_\d+%%%)\s*<\/p>/g, "$1");
+
+    // Substitute math expressions
+    html = html.replace(/%%%MATH_BLOCK_(\d+)%%%/g, (_, i) => renderMathExpression(blocks[Number(i)] || "", true));
+    html = html.replace(/%%%MATH_INLINE_(\d+)%%%/g, (_, i) => renderMathExpression(inlines[Number(i)] || "", false));
+
+    return html;
 }
 
 
@@ -475,14 +661,77 @@ function clearMessages() {
 
     const welcome = document.createElement("div");
     welcome.className = "welcome";
+    welcome.id = "welcome-screen";
 
-    const title = document.createElement("h1");
-    title.textContent = "What can I help with?";
+    welcome.innerHTML = `
+        <div class="hud-container">
+            <div class="hud-header">
+                <div class="hud-status-strip">
+                    <span class="hud-status-pill">
+                        <span class="hud-status-dot"></span>
+                        <span class="hud-mono">CORE RUNTIME</span>
+                    </span>
+                    <span class="hud-divider">/</span>
+                    <span class="hud-meta-item">LOCAL INFERENCE</span>
+                    <span class="hud-divider">/</span>
+                    <span class="hud-meta-item">TOOLS READY</span>
+                    <span class="hud-divider">/</span>
+                    <span class="hud-meta-item">PERSISTENCE MOUNTED</span>
+                </div>
+            </div>
 
-    const subtitle = document.createElement("p");
-    subtitle.textContent = "Your local assistant. Ready when you are.";
+            <div class="hud-hero">
+                <h1 class="hud-title">PAIN Workstation</h1>
+                <p class="hud-subtitle">
+                    Autonomous local intelligence engine with tool-calling runtime, real-time web grounding, and persistent memory.
+                </p>
+            </div>
 
-    welcome.append(title, subtitle);
+            <div class="hud-section-header">
+                <span class="hud-section-label">COMMAND SHORTCUTS</span>
+                <span class="hud-section-hint">Click to populate prompt or press Enter in composer</span>
+            </div>
+
+            <div class="suggestion-grid">
+                <button class="suggestion-card" type="button" data-prompt="What festival or holiday was yesterday?">
+                    <div class="suggestion-card-header">
+                        <span class="suggestion-cmd">/temporal</span>
+                        <span class="suggestion-action-hint">Run ↵</span>
+                    </div>
+                    <div class="suggestion-title">Check Recent Festivals & Holidays</div>
+                    <div class="suggestion-desc">Query calendar anchor and real-time external festival events</div>
+                </button>
+
+                <button class="suggestion-card" type="button" data-prompt="Search your persistent memory for my saved preferences">
+                    <div class="suggestion-card-header">
+                        <span class="suggestion-cmd">/memory</span>
+                        <span class="suggestion-action-hint">Run ↵</span>
+                    </div>
+                    <div class="suggestion-title">Query Long-Term Semantic Memory</div>
+                    <div class="suggestion-desc">Retrieve stored user preferences, profile context, and notes</div>
+                </button>
+
+                <button class="suggestion-card" type="button" data-prompt="Write a Python script to monitor system CPU and RAM and alert when high">
+                    <div class="suggestion-card-header">
+                        <span class="suggestion-cmd">/script</span>
+                        <span class="suggestion-action-hint">Run ↵</span>
+                    </div>
+                    <div class="suggestion-title">Generate Telemetry Monitor</div>
+                    <div class="suggestion-desc">Synthesize production-grade Python scripts with syntax formatting</div>
+                </button>
+
+                <button class="suggestion-card" type="button" data-prompt="Search the web for the latest advancements in local AI inference">
+                    <div class="suggestion-card-header">
+                        <span class="suggestion-cmd">/search</span>
+                        <span class="suggestion-action-hint">Run ↵</span>
+                    </div>
+                    <div class="suggestion-title">Real-Time Web Intelligence</div>
+                    <div class="suggestion-desc">DuckDuckGo live retrieval with grounded synthesis and citations</div>
+                </button>
+            </div>
+        </div>
+    `;
+
     $("messages").appendChild(welcome);
 }
 
@@ -539,9 +788,38 @@ function appendMessage(role, content = "") {
     const message = document.createElement("div");
     message.className = `message ${role}`;
 
-    const label = document.createElement("div");
-    label.className = "message-role";
-    label.textContent = role === "user" ? "You" : (role === "assistant" ? "PAIN" : "System");
+    const header = document.createElement("div");
+    header.className = "message-header";
+
+    if (role === "user") {
+        header.innerHTML = `
+            <div class="message-role-tag user-tag">
+                <span class="role-marker">❯</span>
+                <span class="message-sender">PROMPT</span>
+            </div>
+        `;
+    } else if (role === "assistant") {
+        header.innerHTML = `
+            <div class="message-role-tag assistant-tag">
+                <span class="role-marker">●</span>
+                <span class="message-sender">PAIN</span>
+                <span class="message-badge">RUNTIME</span>
+            </div>
+            <div class="message-actions">
+                <button class="copy-msg-btn" type="button" title="Copy message">
+                    <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                    <span>Copy</span>
+                </button>
+            </div>
+        `;
+    } else {
+        header.innerHTML = `
+            <div class="message-role-tag system-tag">
+                <span class="role-marker">§</span>
+                <span class="message-sender">SYSTEM</span>
+            </div>
+        `;
+    }
 
     const body = document.createElement("div");
     body.className = role === "assistant" ? "message-body" : "message-content";
@@ -555,21 +833,7 @@ function appendMessage(role, content = "") {
         body.textContent = content;
     }
 
-    message.append(label, body);
-
-    if (role === "assistant") {
-        const actions = document.createElement("div");
-        actions.className = "message-actions";
-
-        const copyBtn = document.createElement("button");
-        copyBtn.className = "copy-msg-btn";
-        copyBtn.type = "button";
-        copyBtn.textContent = "Copy";
-        actions.appendChild(copyBtn);
-
-        message.appendChild(actions);
-    }
-
+    message.append(header, body);
     $("messages").appendChild(message);
     scrollToBottom();
 
@@ -579,18 +843,31 @@ function appendMessage(role, content = "") {
 
 // Event delegation for copying code blocks, tool data, and assistant messages
 $("messages").addEventListener("click", (event) => {
+    // 0. Suggestion card click
+    const card = event.target.closest(".suggestion-card");
+    if (card && card.dataset.prompt) {
+        const input = $("message-input");
+        if (input && !isGenerating) {
+            input.value = card.dataset.prompt;
+            input.dispatchEvent(new Event("input"));
+            input.focus();
+        }
+        return;
+    }
+
     // 1. Copy code block
     const copyCodeBtn = event.target.closest(".copy-code-btn");
     if (copyCodeBtn) {
         const rawCode = decodeURIComponent(copyCodeBtn.dataset.code || "");
         navigator.clipboard.writeText(rawCode).then(() => {
-            const originalText = copyCodeBtn.textContent;
-            copyCodeBtn.textContent = "Copied!";
+            const textEl = copyCodeBtn.querySelector(".copy-text") || copyCodeBtn;
+            const originalText = textEl.textContent;
+            textEl.textContent = "Copied!";
             copyCodeBtn.classList.add("copied");
             setTimeout(() => {
-                copyCodeBtn.textContent = originalText;
+                textEl.textContent = originalText;
                 copyCodeBtn.classList.remove("copied");
-            }, 2000);
+            }, 1800);
         }).catch(err => {
             console.error("Clipboard copy failed:", err);
         });
@@ -606,7 +883,7 @@ $("messages").addEventListener("click", (event) => {
             toolCopyBtn.textContent = "Copied!";
             setTimeout(() => {
                 toolCopyBtn.textContent = orig;
-            }, 2000);
+            }, 1800);
         }).catch(err => {
             console.error("Clipboard copy failed:", err);
         });
@@ -621,15 +898,19 @@ $("messages").addEventListener("click", (event) => {
         if (bodyDiv) {
             const textToCopy = bodyDiv.innerText;
             navigator.clipboard.writeText(textToCopy).then(() => {
-                const originalText = copyMsgBtn.textContent;
-                copyMsgBtn.textContent = "Copied!";
+                const textSpan = copyMsgBtn.querySelector("span") || copyMsgBtn;
+                const orig = textSpan.textContent;
+                textSpan.textContent = "Copied!";
+                copyMsgBtn.classList.add("copied");
                 setTimeout(() => {
-                    copyMsgBtn.textContent = originalText;
-                }, 2000);
+                    textSpan.textContent = orig;
+                    copyMsgBtn.classList.remove("copied");
+                }, 1800);
             }).catch(err => {
                 console.error("Clipboard copy failed:", err);
             });
         }
+        return;
     }
 });
 
@@ -891,15 +1172,16 @@ function completeToolActivity(callId, result, error = null) {
 
 function setSendButtonMode(generating) {
     const btn = $("send-button");
+    if (!btn) return;
     if (generating) {
         btn.classList.add("stop-mode");
-        btn.textContent = "■";
+        btn.innerHTML = `<span class="stop-box">■</span><span>Stop</span>`;
         btn.title = "Stop generating";
         btn.disabled = false;
         btn.type = "button";
     } else {
         btn.classList.remove("stop-mode");
-        btn.textContent = "↑";
+        btn.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg><span>Send</span>`;
         btn.title = "Send message";
         btn.disabled = false;
         btn.type = "submit";
@@ -932,23 +1214,26 @@ function getOrCreateAssistantTurn() {
     const message = document.createElement("div");
     message.className = "message assistant";
 
-    const label = document.createElement("div");
-    label.className = "message-role";
-    label.textContent = "PAIN";
+    const header = document.createElement("div");
+    header.className = "message-header";
+    header.innerHTML = `
+        <div class="message-role-tag assistant-tag">
+            <span class="role-marker">●</span>
+            <span class="message-sender">PAIN</span>
+            <span class="message-badge streaming">STREAMING</span>
+        </div>
+        <div class="message-actions">
+            <button class="copy-msg-btn" type="button" title="Copy message">
+                <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                <span>Copy</span>
+            </button>
+        </div>
+    `;
 
     const body = document.createElement("div");
     body.className = "message-body";
 
-    const actions = document.createElement("div");
-    actions.className = "message-actions";
-
-    const copyBtn = document.createElement("button");
-    copyBtn.className = "copy-msg-btn";
-    copyBtn.type = "button";
-    copyBtn.textContent = "Copy";
-    actions.appendChild(copyBtn);
-
-    message.append(label, body, actions);
+    message.append(header, body);
     $("messages").appendChild(message);
 
     currentTurn.messageEl = message;
@@ -1068,7 +1353,7 @@ async function sendMessage(text) {
                         turn.bodyEl.appendChild(turn.postToolEl);
                     }
                     turn.postToolText += data.content;
-                    turn.postToolEl.innerHTML = renderMarkdown(turn.postToolText);
+                    turn.postToolEl.innerHTML = renderMarkdown(turn.postToolText, true);
                 } else {
                     // Streaming before any tool execution
                     if (!turn.preToolEl) {
@@ -1077,7 +1362,7 @@ async function sendMessage(text) {
                         turn.bodyEl.appendChild(turn.preToolEl);
                     }
                     turn.preToolText += data.content;
-                    turn.preToolEl.innerHTML = renderMarkdown(turn.preToolText);
+                    turn.preToolEl.innerHTML = renderMarkdown(turn.preToolText, true);
                 }
 
                 scrollToBottom(false);
@@ -1087,6 +1372,17 @@ async function sendMessage(text) {
 
             } else if (data.type === "done") {
                 $("model-status").textContent = "Ready";
+                if (currentTurn.preToolEl && currentTurn.preToolText) {
+                    currentTurn.preToolEl.innerHTML = renderMarkdown(currentTurn.preToolText, false);
+                }
+                if (currentTurn.postToolEl && currentTurn.postToolText) {
+                    currentTurn.postToolEl.innerHTML = renderMarkdown(currentTurn.postToolText, false);
+                }
+                const badge = currentTurn.messageEl?.querySelector(".message-badge");
+                if (badge) {
+                    badge.textContent = "RUNTIME";
+                    badge.classList.remove("streaming");
+                }
             }
         };
 
@@ -1154,6 +1450,18 @@ async function sendMessage(text) {
     } finally {
         isGenerating = false;
         abortController = null;
+
+        if (currentTurn.preToolEl && currentTurn.preToolText) {
+            currentTurn.preToolEl.innerHTML = renderMarkdown(currentTurn.preToolText, false);
+        }
+        if (currentTurn.postToolEl && currentTurn.postToolText) {
+            currentTurn.postToolEl.innerHTML = renderMarkdown(currentTurn.postToolText, false);
+        }
+        const badge = currentTurn.messageEl?.querySelector(".message-badge");
+        if (badge) {
+            badge.textContent = "RUNTIME";
+            badge.classList.remove("streaming");
+        }
 
         setSendButtonMode(false);
         $("model-selector").disabled = false;

@@ -6,6 +6,8 @@
 
     <title>PAIN</title>
 
+    <link rel="stylesheet" href="/static/css/vendor/katex.min.css">
+    <link rel="stylesheet" href="/static/css/vendor/github-dark.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 
@@ -18,8 +20,15 @@
     <aside class="sidebar" id="sidebar">
 
         <div class="sidebar-top">
-            <span class="app-name">PAIN</span>
-            <button id="new-chat" class="new-chat" type="button">+ New chat</button>
+            <div class="app-brand">
+                <span class="app-name">PAIN</span>
+                <span class="app-tag">CORE</span>
+            </div>
+            <button id="new-chat" class="new-chat" type="button">
+                <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>New Session</span>
+                <span class="kbd-badge">⌘N</span>
+            </button>
         </div>
 
         <div class="conversation-section">
@@ -29,15 +38,18 @@
 
         <nav class="sidebar-nav">
             <button class="nav-item active" data-page="chat" type="button">
-                <span>◫</span> Chat
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                <span>Chat</span>
             </button>
 
             <button class="nav-item" data-page="system" type="button">
-                <span>▤</span> System
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                <span>System</span>
             </button>
 
             <button class="nav-item" data-page="settings" type="button">
-                <span>⚙</span> Settings
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                <span>Settings</span>
             </button>
         </nav>
 
@@ -54,15 +66,19 @@
         <header class="topbar">
 
             <div class="topbar-left">
-                <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Toggle sidebar">☰</button>
+                <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Toggle sidebar">
+                    <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                </button>
                 <div class="page-title" id="page-title">Chat</div>
             </div>
 
             <div class="topbar-right">
 
-                <select id="model-selector" aria-label="Select model">
-                    <option value="">Loading models...</option>
-                </select>
+                <div class="model-select-wrapper">
+                    <select id="model-selector" aria-label="Select model">
+                        <option value="">Loading models...</option>
+                    </select>
+                </div>
 
                 <span id="model-status" class="model-status">
                     Idle
@@ -79,13 +95,76 @@
 
             <div id="messages" class="messages">
 
-                <div class="welcome">
+                <div class="welcome" id="welcome-screen">
 
-                    <h1>What can I help with?</h1>
+                    <div class="hud-container">
 
-                    <p>
-                        Your local assistant. Ready when you are.
-                    </p>
+                        <div class="hud-header">
+                            <div class="hud-status-strip">
+                                <span class="hud-status-pill">
+                                    <span class="hud-status-dot"></span>
+                                    <span class="hud-mono">CORE RUNTIME</span>
+                                </span>
+                                <span class="hud-divider">/</span>
+                                <span class="hud-meta-item">LOCAL INFERENCE</span>
+                                <span class="hud-divider">/</span>
+                                <span class="hud-meta-item">TOOLS READY</span>
+                                <span class="hud-divider">/</span>
+                                <span class="hud-meta-item">PERSISTENCE MOUNTED</span>
+                            </div>
+                        </div>
+
+                        <div class="hud-hero">
+                            <h1 class="hud-title">PAIN Workstation</h1>
+                            <p class="hud-subtitle">
+                                Autonomous local intelligence engine with tool-calling runtime, real-time web grounding, and persistent memory.
+                            </p>
+                        </div>
+
+                        <div class="hud-section-header">
+                            <span class="hud-section-label">COMMAND SHORTCUTS</span>
+                            <span class="hud-section-hint">Click to populate prompt or press Enter in composer</span>
+                        </div>
+
+                        <div class="suggestion-grid">
+                            <button class="suggestion-card" type="button" data-prompt="What festival or holiday was yesterday?">
+                                <div class="suggestion-card-header">
+                                    <span class="suggestion-cmd">/temporal</span>
+                                    <span class="suggestion-action-hint">Run ↵</span>
+                                </div>
+                                <div class="suggestion-title">Check Recent Festivals & Holidays</div>
+                                <div class="suggestion-desc">Query calendar anchor and real-time external festival events</div>
+                            </button>
+
+                            <button class="suggestion-card" type="button" data-prompt="Search your persistent memory for my saved preferences">
+                                <div class="suggestion-card-header">
+                                    <span class="suggestion-cmd">/memory</span>
+                                    <span class="suggestion-action-hint">Run ↵</span>
+                                </div>
+                                <div class="suggestion-title">Query Long-Term Semantic Memory</div>
+                                <div class="suggestion-desc">Retrieve stored user preferences, profile context, and notes</div>
+                            </button>
+
+                            <button class="suggestion-card" type="button" data-prompt="Write a Python script to monitor system CPU and RAM and alert when high">
+                                <div class="suggestion-card-header">
+                                    <span class="suggestion-cmd">/script</span>
+                                    <span class="suggestion-action-hint">Run ↵</span>
+                                </div>
+                                <div class="suggestion-title">Generate Telemetry Monitor</div>
+                                <div class="suggestion-desc">Synthesize production-grade Python scripts with syntax formatting</div>
+                            </button>
+
+                            <button class="suggestion-card" type="button" data-prompt="Search the web for the latest advancements in local AI inference">
+                                <div class="suggestion-card-header">
+                                    <span class="suggestion-cmd">/search</span>
+                                    <span class="suggestion-action-hint">Run ↵</span>
+                                </div>
+                                <div class="suggestion-title">Real-Time Web Intelligence</div>
+                                <div class="suggestion-desc">DuckDuckGo live retrieval with grounded synthesis and citations</div>
+                            </button>
+                        </div>
+
+                    </div>
 
                 </div>
 
@@ -96,21 +175,40 @@
 
                 <form id="chat-form" class="composer">
 
-                    <textarea
-                        id="message-input"
-                        placeholder="Message PAIN..."
-                        rows="1"
-                    ></textarea>
+                    <div class="composer-input-row">
+                        <textarea
+                            id="message-input"
+                            placeholder="Message PAIN or enter a command..."
+                            rows="1"
+                        ></textarea>
+                    </div>
 
-                    <button id="send-button" type="submit" title="Send message">
-                        ↑
-                    </button>
+                    <div class="composer-bottom-bar">
+                        <div class="composer-capabilities">
+                            <span class="cap-pill" title="DuckDuckGo Search Grounding">
+                                <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line></svg>
+                                Web Search
+                            </span>
+                            <span class="cap-pill" title="Persistent Semantic Storage">
+                                <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                                Chroma Memory
+                            </span>
+                            <span class="cap-pill" title="Local System Telemetry">
+                                <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect></svg>
+                                Telemetry
+                            </span>
+                        </div>
+
+                        <div class="composer-controls">
+                            <span class="composer-hint">Return to send · Shift+Return for line</span>
+                            <button id="send-button" type="submit" title="Send message (Return)">
+                                <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                                <span>Send</span>
+                            </button>
+                        </div>
+                    </div>
 
                 </form>
-
-                <div class="composer-hint">
-                    Enter to send · Shift + Enter for new line
-                </div>
 
             </div>
 
@@ -362,6 +460,9 @@
 
 </div>
 
+<script src="/static/js/vendor/katex.min.js"></script>
+<script src="/static/js/vendor/marked.min.js"></script>
+<script src="/static/js/vendor/highlight.min.js"></script>
 <script src="/static/js/app.js"></script>
 
 </body>
