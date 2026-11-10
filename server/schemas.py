@@ -21,3 +21,8 @@ class RenameConversationRequest(BaseModel):
 
 class SwitchModelRequest(BaseModel):
     model: str = Field(min_length=1)
+
+
+class SummarizeRequest(BaseModel):
+    conversation_id: int
+    model: str | None = None

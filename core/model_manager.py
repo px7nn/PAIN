@@ -1,10 +1,11 @@
 import atexit
+import json
 import subprocess
 import threading
 import time
 
 from pathlib        import Path
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from urllib.error   import URLError, HTTPError
 
 from core.config    import config, Config
@@ -70,6 +71,7 @@ class ModelManager:
             "--min-p", str(inference.min_p),
             "--jinja",
             "--reasoning", "off",
+            "--metrics",
         ]
 
     def _health_check(self) -> bool:
@@ -178,10 +180,100 @@ class ModelManager:
             self.start(model_name)
 
     def status(self) -> dict:
+        is_up = self.is_running or self._health_check()
         return {
-            "running": self.is_running,
-            "active_model": self.active_model,
-            "server_url": self.base_url if self.is_running else None
+            "running": is_up,
+            "active_model": self.active_model or (self.config.inference.default_model if is_up else None),
+            "server_url": self.base_url if is_up else None
+        }
+
+    def get_metrics(self) -> dict:
+        """Fetch and parse live server telemetry from llama-server (/metrics, /slots, /props)"""
+        if not (self.is_running or self._health_check()):
+            return {
+                "active": False,
+                "server_url": None,
+                "prompt_tokens_total": 0,
+                "prompt_tokens_cached_total": 0,
+                "tokens_predicted_total": 0,
+                "prompt_eval_speed": None,
+                "generation_speed": None,
+                "kv_cache_tokens": None,
+                "kv_cache_usage_ratio": None,
+                "n_ctx": None,
+                "raw": {}
+            }
+
+        metrics = {}
+        # 1. Prometheus /metrics endpoint (enabled by --metrics flag)
+        try:
+            req = Request(f"{self.base_url}/metrics", headers={"User-Agent": "PAIN"})
+            with urlopen(req, timeout=1.0) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        key = parts[0]
+                        val = parts[1]
+                        try:
+                            metrics[key] = float(val) if ("." in val or "e" in val.lower()) else int(val)
+                        except ValueError:
+                            metrics[key] = val
+        except Exception:
+            pass
+
+        # 2. Server slots endpoint
+        slots = []
+        try:
+            req = Request(f"{self.base_url}/slots", headers={"User-Agent": "PAIN"})
+            with urlopen(req, timeout=1.0) as resp:
+                slots_data = json.loads(resp.read().decode("utf-8"))
+                if isinstance(slots_data, list):
+                    slots = slots_data
+        except Exception:
+            pass
+
+        # 3. Server props endpoint
+        props = {}
+        try:
+            req = Request(f"{self.base_url}/props", headers={"User-Agent": "PAIN"})
+            with urlopen(req, timeout=1.0) as resp:
+                props = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            pass
+
+        # Extract llama.cpp Prometheus metrics
+        prompt_eval_speed = metrics.get("llamacpp:prompt_tokens_seconds")
+        gen_speed = metrics.get("llamacpp:predicted_tokens_seconds")
+        prompt_tokens_total = metrics.get("llamacpp:prompt_tokens_total", 0)
+        prompt_cached_total = metrics.get("llamacpp:prompt_tokens_cached_total", 0)
+        tokens_predicted_total = metrics.get("llamacpp:tokens_predicted_total", 0)
+        kv_cache_tokens = metrics.get("llamacpp:kv_cache_tokens")
+        kv_cache_usage_ratio = metrics.get("llamacpp:kv_cache_usage_ratio")
+
+        slot_past = None
+        slot_ctx = None
+        if slots and isinstance(slots, list) and len(slots) > 0:
+            first_slot = slots[0]
+            if isinstance(first_slot, dict):
+                slot_past = first_slot.get("n_past")
+                slot_ctx = first_slot.get("n_ctx")
+
+        return {
+            "active": True,
+            "server_url": self.base_url,
+            "prompt_tokens_total": prompt_tokens_total,
+            "prompt_tokens_cached_total": prompt_cached_total,
+            "tokens_predicted_total": tokens_predicted_total,
+            "prompt_eval_speed": round(prompt_eval_speed, 1) if isinstance(prompt_eval_speed, (int, float)) else None,
+            "generation_speed": round(gen_speed, 1) if isinstance(gen_speed, (int, float)) else None,
+            "kv_cache_tokens": kv_cache_tokens if kv_cache_tokens is not None else slot_past,
+            "kv_cache_usage_ratio": round(kv_cache_usage_ratio, 3) if isinstance(kv_cache_usage_ratio, (int, float)) else None,
+            "n_ctx": slot_ctx or (props.get("default_generation_settings", {}).get("n_ctx")),
+            "raw": metrics
         }
 
     def get_log_path(self) -> Path | None:

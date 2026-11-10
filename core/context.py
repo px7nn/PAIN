@@ -280,12 +280,40 @@ class ContextManager:
             # Squeeze agent headroom if context is very constrained
             available_for_history = budget - (system_tokens + tool_tokens + memory_tokens)
 
+        # Check if an explicit or stored summary exists for this conversation
+        stored_summary = self.conversations.get_summary(conversation_id)
+
+        # Check for compaction landmark boundary
+        compaction_boundary_idx = -1
+        for idx, m in enumerate(raw_history):
+            if m.get("role") == "system" and (m.get("content") or "").startswith("[Conversation Compacted]"):
+                compaction_boundary_idx = idx
+
         # Select recent verbatim messages backwards
         selected_recent: list[dict] = []
         used_history_tokens = 0
         omitted_messages: list[dict] = []
 
-        for idx, message in enumerate(reversed(history)):
+        if compaction_boundary_idx != -1:
+            # Everything before the compaction landmark was folded into the summary
+            omitted_messages = [
+                {"role": m["role"], "content": m["content"]}
+                for m in raw_history[:compaction_boundary_idx]
+                if m.get("role") != "system"
+            ]
+            history_pool = [
+                {"role": m["role"], "content": m["content"]}
+                for m in raw_history[compaction_boundary_idx + 1:]
+                if m.get("role") != "system"
+            ]
+        elif stored_summary and len(history) > 2:
+            preserved_count = 2 if len(history) <= 4 else 4
+            omitted_messages = history[:-preserved_count]
+            history_pool = history[-preserved_count:]
+        else:
+            history_pool = history
+
+        for idx, message in enumerate(reversed(history_pool)):
             msg_tokens = self._message_tokens(message)
 
             # Always preserve at least the latest user message
@@ -299,9 +327,8 @@ class ContextManager:
                 selected_recent.append(message)
                 used_history_tokens += msg_tokens
             else:
-                # All older turns that exceed the verbatim window are tracked for compaction
-                remaining_old = list(reversed(history))[idx:]
-                omitted_messages = list(reversed(remaining_old))
+                remaining_old = list(reversed(history_pool))[idx:]
+                omitted_messages = list(reversed(remaining_old)) + omitted_messages
                 break
 
         selected_recent.reverse()
@@ -310,20 +337,22 @@ class ContextManager:
         summary_message = None
         summary_tokens = 0
 
-        if omitted_messages:
-            # Check if an existing stored summary exists
-            stored_summary = self.conversations.get_summary(conversation_id)
-            if not stored_summary:
-                stored_summary = self._compact_older_messages(omitted_messages)
+        if stored_summary:
+            summary_message = {
+                "role": "system",
+                "content": f"[Earlier Conversation Summary]\n{stored_summary}"
+            }
+            summary_tokens = self._message_tokens(summary_message)
+        elif omitted_messages:
+            auto_summary = self._compact_older_messages(omitted_messages)
+            if auto_summary:
                 try:
-                    self.conversations.update_summary(conversation_id, stored_summary)
+                    self.conversations.update_summary(conversation_id, auto_summary)
                 except Exception:
                     pass
-
-            if stored_summary:
                 summary_message = {
                     "role": "system",
-                    "content": f"[Earlier Conversation Summary]\n{stored_summary}"
+                    "content": f"[Earlier Conversation Summary]\n{auto_summary}"
                 }
                 summary_tokens = self._message_tokens(summary_message)
 
@@ -366,3 +395,111 @@ class ContextManager:
             omitted_messages=len(omitted_messages),
             tokenizer=tokenizer_name
         )
+
+    # --------------------------------------------------
+    # DETAILED CONTEXT TELEMETRY & METRICS
+    # --------------------------------------------------
+
+    def get_context_metrics(
+        self,
+        conversation_id: int,
+        model_name: str,
+        tools: list[dict] | None = None
+    ) -> dict:
+        """Calculate detailed real-time context token metrics and thresholds"""
+        model = self.config.get_model(model_name)
+        context_size, budget = self._get_budget(model_name)
+
+        system_content = self.load_personality(model_name)
+        system_tokens = self._message_tokens({"role": "system", "content": system_content})
+
+        now = datetime.now().astimezone()
+        env_tokens = self._message_tokens({
+            "role": "system",
+            "content": (
+                "[System Environment & Real-Time Context]\n"
+                f"Current Date: {now.strftime('%A, %B %d, %Y')}\n"
+                f"Local Timezone: {now.tzname() or 'Local'} (UTC{now.strftime('%z')})"
+            )
+        })
+
+        tool_tokens = self._tool_tokens(tools)
+
+        # Baseline pinned memory reserve
+        memory_tokens = 35
+
+        stored_summary = self.conversations.get_summary(conversation_id)
+        summary_tokens = 0
+        if stored_summary:
+            summary_tokens = self._message_tokens({
+                "role": "system",
+                "content": f"[Earlier Conversation Summary]\n{stored_summary}"
+            })
+
+        raw_history = self.conversations.get_messages(conversation_id)
+        history = [m for m in raw_history if m["role"] != "system"]
+
+        # Check for compaction landmark boundary
+        compaction_boundary_idx = -1
+        for idx, m in enumerate(raw_history):
+            if m.get("role") == "system" and (m.get("content") or "").startswith("[Conversation Compacted]"):
+                compaction_boundary_idx = idx
+
+        # If a compaction boundary or summary is active, recent verbatim window is restricted
+        if compaction_boundary_idx != -1:
+            omitted = len([m for m in raw_history[:compaction_boundary_idx] if m.get("role") != "system"])
+            active_history = [m for m in raw_history[compaction_boundary_idx + 1:] if m.get("role") != "system"]
+        elif stored_summary and len(history) > 2:
+            preserved_count = 2 if len(history) <= 4 else 4
+            active_history = history[-preserved_count:]
+            omitted = len(history) - preserved_count
+        else:
+            active_history = history
+            omitted = 0
+
+        history_tokens = sum(
+            self._message_tokens({"role": m["role"], "content": m["content"]})
+            for m in active_history
+        )
+
+        total_used = system_tokens + env_tokens + tool_tokens + memory_tokens + summary_tokens + history_tokens
+        context_available = max(0, context_size - total_used)
+        percent = round(min(100.0, (total_used / context_size) * 100), 1)
+
+        # Llama.cpp standard color levels:
+        # < 80% -> OK (normal/green)
+        # 80% - 95% -> WARNING (amber)
+        # >= 95% -> CRITICAL (red)
+        if percent >= 95.0:
+            color_level = "critical"
+        elif percent >= 80.0:
+            color_level = "warning"
+        else:
+            color_level = "ok"
+
+        # Can summarize if there are at least 2 chat turns
+        can_summarize = len(history) >= 2
+
+        return {
+            "conversation_id": conversation_id,
+            "model": model_name,
+            "context_size": context_size,
+            "context_budget": budget,
+            "context_used": total_used,
+            "context_available": context_available,
+            "context_percent": percent,
+            "color_level": color_level,
+            "breakdown": {
+                "system": system_tokens,
+                "env": env_tokens,
+                "tools": tool_tokens,
+                "memory": memory_tokens,
+                "summary": summary_tokens,
+                "history": history_tokens
+            },
+            "has_summary": bool(stored_summary),
+            "summary_text": stored_summary,
+            "can_summarize": can_summarize,
+            "message_count": len(history),
+            "omitted_messages": omitted
+        }

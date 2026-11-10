@@ -4,7 +4,7 @@ from fastapi           import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from core.engine    import Engine, EngineError
-from server.schemas import ChatRequest
+from server.schemas import ChatRequest, SummarizeRequest
 
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
@@ -72,6 +72,14 @@ def stream_chat(payload: ChatRequest, request: Request):
                 model=model_name
             ):
                 yield f"data: {json.dumps(event, default=str)}\n\n"
+
+            # Emit live real-time context token metrics immediately upon completion
+            try:
+                metrics = engine.get_context_metrics(conversation_id, model_name)
+                yield f"data: {json.dumps({'type': 'context_metrics', 'context': metrics}, default=str)}\n\n"
+            except Exception:
+                pass
+
             yield 'data: {"type":"done"}\n\n'
 
         except Exception as exc:
@@ -90,3 +98,33 @@ def stream_chat(payload: ChatRequest, request: Request):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.get("/context")
+def get_context_metrics(
+    request: Request,
+    conversation_id: int | None = None,
+    model: str | None = None
+):
+    """Retrieve real-time context metrics, budget, breakdown and llama-server telemetry"""
+    engine = get_engine_from_request(request)
+    try:
+        return engine.get_context_metrics(conversation_id=conversation_id, model=model)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/summarize")
+def summarize_conversation(payload: SummarizeRequest, request: Request):
+    """Compact earlier conversation history into a dense summary, freeing up context tokens"""
+    engine = get_engine_from_request(request)
+    try:
+        result = engine.summarize_conversation(
+            conversation_id=payload.conversation_id,
+            model=payload.model
+        )
+        return result
+    except EngineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Summarization error: {exc}") from exc

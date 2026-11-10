@@ -381,6 +381,256 @@ function scrollToBottom(force = false) {
 
 
 // --------------------------------------------------
+// LLAMA.CPP STYLE REAL-TIME CONTEXT GAUGE & METRICS
+// --------------------------------------------------
+
+let currentContextMetrics = null;
+let isCompacting = false;
+let streamingOutputTokens = 0;
+
+function formatTokens(count) {
+    if (count === null || count === undefined || isNaN(count)) return "0";
+    if (count >= 1000000) return (count / 1000000).toFixed(1) + "M";
+    if (count >= 1000) return (count / 1000).toFixed(1) + "k";
+    return String(count);
+}
+
+function updateContextGaugeUI(metrics) {
+    if (!metrics) return;
+    currentContextMetrics = metrics;
+
+    const used = metrics.context_used || 0;
+    const total = metrics.context_size || 8192;
+    const available = metrics.context_available ?? Math.max(0, total - used);
+    const percent = Math.min(100, Math.max(0, metrics.context_percent ?? (total > 0 ? (used / total) * 100 : 0)));
+
+    // Level: ok (<80%), warning (80-95%), critical (>=95%)
+    let level = "ok";
+    if (percent >= 95) level = "critical";
+    else if (percent >= 80) level = "warning";
+
+    // 1. Composer Gauge Dial & Pill
+    const dialBar = $("gauge-bar");
+    if (dialBar) {
+        const circumference = 69.115; // 2 * Math.PI * 11
+        const offset = circumference * (1 - percent / 100);
+        dialBar.style.strokeDashoffset = String(Math.max(0, offset));
+        dialBar.classList.remove("level-ok", "level-warning", "level-critical");
+        dialBar.classList.add(`level-${level}`);
+    }
+
+    const gaugeVal = $("gauge-val");
+    if (gaugeVal) {
+        gaugeVal.textContent = `${formatTokens(used)} / ${formatTokens(total)}`;
+    }
+
+    const gaugeTag = $("gauge-percent-tag");
+    if (gaugeTag) {
+        gaugeTag.textContent = `${percent.toFixed(0)}%`;
+        gaugeTag.classList.remove("level-ok", "level-warning", "level-critical");
+        gaugeTag.classList.add(`level-${level}`);
+    }
+
+    // 2. Topbar Context Pill
+    const topbarDot = $("topbar-ctx-dot");
+    if (topbarDot) {
+        topbarDot.classList.remove("level-ok", "level-warning", "level-critical");
+        topbarDot.classList.add(`level-${level}`);
+    }
+
+    const topbarText = $("topbar-ctx-text");
+    if (topbarText) {
+        topbarText.textContent = `Context: ${used.toLocaleString()} / ${total.toLocaleString()}`;
+    }
+
+    const topbarBadge = $("topbar-ctx-badge");
+    if (topbarBadge) {
+        topbarBadge.textContent = `${percent.toFixed(0)}%`;
+    }
+
+    // 3. Popup Card
+    const popupFraction = $("popup-usage-fraction");
+    if (popupFraction) {
+        popupFraction.textContent = `${used.toLocaleString()} / ${total.toLocaleString()} tok`;
+    }
+
+    const popupLevelTag = $("popup-level-tag");
+    if (popupLevelTag) {
+        popupLevelTag.textContent = `${percent.toFixed(1)}% used`;
+        popupLevelTag.classList.remove("level-ok", "level-warning", "level-critical");
+        popupLevelTag.classList.add(`level-${level}`);
+    }
+
+    const popupFill = $("popup-progress-fill");
+    if (popupFill) {
+        popupFill.style.width = `${percent}%`;
+        popupFill.classList.remove("level-ok", "level-warning", "level-critical");
+        popupFill.classList.add(`level-${level}`);
+    }
+
+    const popupMetaUsed = $("popup-meta-used");
+    if (popupMetaUsed) {
+        popupMetaUsed.textContent = `${percent.toFixed(1)}% used`;
+    }
+
+    const popupMetaRemaining = $("popup-meta-remaining");
+    if (popupMetaRemaining) {
+        popupMetaRemaining.textContent = `${available.toLocaleString()} tok remaining`;
+    }
+
+    // Breakdown
+    const b = metrics.breakdown || {};
+    const histEl = $("popup-history-tok");
+    if (histEl) histEl.textContent = `${(b.history || 0).toLocaleString()} tok`;
+
+    const sysEl = $("popup-system-tok");
+    if (sysEl) sysEl.textContent = `${(b.system || 0).toLocaleString()} tok`;
+
+    const toolsEl = $("popup-tools-tok");
+    if (toolsEl) toolsEl.textContent = `${(b.tools || 0).toLocaleString()} tok`;
+
+    const summaryRow = $("popup-summary-row");
+    const summaryEl = $("popup-summary-tok");
+    if (summaryRow && summaryEl) {
+        if (metrics.has_summary && b.summary) {
+            summaryRow.style.display = "flex";
+            summaryEl.textContent = `${b.summary.toLocaleString()} tok`;
+        } else {
+            summaryRow.style.display = "none";
+        }
+    }
+
+    // Llama.cpp Telemetry (--metrics)
+    const sm = metrics.server_metrics || {};
+    const genSpeedEl = $("popup-gen-speed");
+    if (genSpeedEl) {
+        genSpeedEl.textContent = sm.generation_speed != null ? `${sm.generation_speed} tok/s` : "— tok/s";
+    }
+
+    const evalSpeedEl = $("popup-eval-speed");
+    if (evalSpeedEl) {
+        evalSpeedEl.textContent = sm.prompt_eval_speed != null ? `${sm.prompt_eval_speed} tok/s` : "— tok/s";
+    }
+
+    const kvEl = $("popup-kv-cache");
+    if (kvEl) {
+        kvEl.textContent = sm.kv_cache_tokens != null ? `${sm.kv_cache_tokens.toLocaleString()} tok` : "— tok";
+    }
+
+    const tokensGenEl = $("popup-tokens-generated");
+    if (tokensGenEl) {
+        tokensGenEl.textContent = sm.tokens_predicted_total != null ? `${sm.tokens_predicted_total.toLocaleString()} tok` : "— tok";
+    }
+
+    const promptEvalEl = $("popup-prompt-evaluated");
+    if (promptEvalEl) {
+        promptEvalEl.textContent = sm.prompt_tokens_total != null ? `${sm.prompt_tokens_total.toLocaleString()} tok` : "— tok";
+    }
+
+    // Summarize Button State
+    const summarizeBtn = $("summarize-btn");
+    const summarizeLabel = $("summarize-btn-label");
+    const summarizeSubtext = $("summarize-subtext");
+    if (summarizeBtn && summarizeLabel) {
+        const canCompact = Boolean(metrics.can_summarize && activeConversation);
+        summarizeBtn.disabled = !canCompact || isGenerating || isCompacting;
+
+        if (metrics.has_summary) {
+            summarizeLabel.textContent = isCompacting ? "Compacting..." : "Re-summarize conversation";
+            if (summarizeSubtext) {
+                summarizeSubtext.textContent = "Active summary in place. Click to refresh the condensed brief.";
+            }
+        } else {
+            summarizeLabel.textContent = isCompacting ? "Compacting..." : "Summarize conversation";
+            if (summarizeSubtext) {
+                summarizeSubtext.textContent = "Condenses earlier turns into a dense brief so context drops back down.";
+            }
+        }
+    }
+}
+
+async function refreshContextMetrics(conversationId = activeConversation, model = null) {
+    try {
+        const selectedModel = model || $("model-selector")?.value || "";
+        const query = new URLSearchParams();
+        if (conversationId) query.set("conversation_id", String(conversationId));
+        if (selectedModel) query.set("model", selectedModel);
+
+        const data = await api(`/chat/context?${query.toString()}`);
+        if (data) {
+            updateContextGaugeUI(data);
+        }
+    } catch (err) {
+        console.warn("Failed to refresh context metrics:", err);
+    }
+}
+
+function toggleContextGaugePopup(force = null) {
+    const popup = $("context-gauge-popup");
+    if (!popup) return;
+
+    const isVisible = popup.style.display !== "none";
+    const nextState = force !== null ? force : !isVisible;
+
+    if (nextState) {
+        popup.style.display = "block";
+        refreshContextMetrics();
+    } else {
+        popup.style.display = "none";
+    }
+}
+
+async function handleSummarizeConversation() {
+    if (!activeConversation || isGenerating || isCompacting) return;
+
+    const summarizeBtn = $("summarize-btn");
+    const summarizeLabel = $("summarize-btn-label");
+
+    try {
+        isCompacting = true;
+        if (summarizeBtn) {
+            summarizeBtn.classList.add("loading");
+            summarizeBtn.disabled = true;
+        }
+        if (summarizeLabel) summarizeLabel.textContent = "Summarizing conversation...";
+
+        const selectedModel = $("model-selector")?.value || null;
+        const res = await api("/chat/summarize", {
+            method: "POST",
+            body: JSON.stringify({
+                conversation_id: activeConversation,
+                model: selectedModel
+            })
+        });
+
+        if (res && res.ok) {
+            // Append compaction message into the chat messages container
+            appendMessage("system", `[Conversation Compacted]\nSummary of earlier exchange:\n${res.summary}`);
+
+            // Update metrics immediately
+            if (res.context) {
+                updateContextGaugeUI(res.context);
+            }
+
+            if (summarizeLabel) {
+                summarizeLabel.textContent = `Summarized! Saved ${res.saved_tokens || 0} tokens`;
+            }
+
+            setTimeout(() => {
+                refreshContextMetrics();
+            }, 1800);
+        }
+    } catch (err) {
+        alert("Summarization failed: " + (err.message || String(err)));
+    } finally {
+        isCompacting = false;
+        if (summarizeBtn) summarizeBtn.classList.remove("loading");
+        refreshContextMetrics();
+    }
+}
+
+
+// --------------------------------------------------
 // NAVIGATION & SIDEBAR
 // --------------------------------------------------
 
@@ -504,6 +754,7 @@ $("model-selector").addEventListener("change", async event => {
 
         previousModel = newModel;
         $("model-status").textContent = "Ready";
+        await refreshContextMetrics(activeConversation, newModel);
     } catch (error) {
         $("model-status").textContent = "Error";
         event.target.value = previousModel;
@@ -758,6 +1009,7 @@ async function openConversation(id) {
         }
 
         await loadConversations();
+        refreshContextMetrics(id);
         showPage("chat");
         toggleSidebar(false);
     } catch (error) {
@@ -771,6 +1023,7 @@ $("new-chat").addEventListener("click", () => {
     activeConversation = null;
     clearMessages();
     loadConversations();
+    refreshContextMetrics(null);
     showPage("chat");
     toggleSidebar(false);
     $("message-input").focus();
@@ -787,6 +1040,29 @@ function appendMessage(role, content = "") {
 
     const message = document.createElement("div");
     message.className = `message ${role}`;
+
+    if (role === "system" && content.startsWith("[Conversation Compacted]")) {
+        message.className = "message compaction-message";
+        const summaryText = content.replace("[Conversation Compacted]", "").replace(/^Summary of earlier exchange:\s*/i, "").trim();
+        const safeSummaryHtml = renderMarkdown(summaryText);
+
+        message.innerHTML = `
+            <div class="compaction-divider-bar">
+                <div class="compaction-pill">
+                    <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none"><polyline points="4 8 12 16 20 8"></polyline><line x1="4" y1="4" x2="20" y2="4"></line><line x1="4" y1="20" x2="20" y2="20"></line></svg>
+                    <span>Conversation compacted · Earlier exchange summarized</span>
+                    <button class="compaction-toggle-btn" type="button">Expand</button>
+                </div>
+            </div>
+            <div class="compaction-card" style="display: none;">
+                <div class="compaction-card-header">COMPACTED CONTEXT BRIEF</div>
+                <div class="compaction-card-body">${safeSummaryHtml}</div>
+            </div>
+        `;
+        $("messages").appendChild(message);
+        scrollToBottom();
+        return { messageEl: message, bodyEl: message, contentEl: message };
+    }
 
     const header = document.createElement("div");
     header.className = "message-header";
@@ -843,7 +1119,20 @@ function appendMessage(role, content = "") {
 
 // Event delegation for copying code blocks, tool data, and assistant messages
 $("messages").addEventListener("click", (event) => {
-    // 0. Suggestion card click
+    // 0. Compaction card toggle
+    const toggleBtn = event.target.closest(".compaction-toggle-btn");
+    if (toggleBtn) {
+        const msgWrap = toggleBtn.closest(".compaction-message");
+        const card = msgWrap ? msgWrap.querySelector(".compaction-card") : null;
+        if (card) {
+            const isHidden = card.style.display === "none";
+            card.style.display = isHidden ? "block" : "none";
+            toggleBtn.textContent = isHidden ? "Collapse" : "Expand";
+        }
+        return;
+    }
+
+    // 0.5. Suggestion card click
     const card = event.target.closest(".suggestion-card");
     if (card && card.dataset.prompt) {
         const input = $("message-input");
@@ -1345,6 +1634,22 @@ async function sendMessage(text) {
             } else if (data.type === "token") {
                 const turn = getOrCreateAssistantTurn();
 
+                // Real-time live gauge update during generation
+                streamingOutputTokens += Math.max(1, Math.ceil((data.content || "").length / 4));
+                if (currentContextMetrics) {
+                    const liveUsed = currentContextMetrics.context_used + streamingOutputTokens;
+                    const total = currentContextMetrics.context_size || 8192;
+                    const livePct = Math.min(100, (liveUsed / total) * 100);
+                    const circumference = 69.115;
+                    const offset = circumference * (1 - livePct / 100);
+                    const dialBar = $("gauge-bar");
+                    if (dialBar) dialBar.style.strokeDashoffset = String(Math.max(0, offset));
+                    const valEl = $("gauge-val");
+                    if (valEl) valEl.textContent = `${formatTokens(liveUsed)} / ${formatTokens(total)}`;
+                    const tagEl = $("gauge-percent-tag");
+                    if (tagEl) tagEl.textContent = `${livePct.toFixed(0)}%`;
+                }
+
                 if (turn.hasTools) {
                     // Streaming after tool execution
                     if (!turn.postToolEl) {
@@ -1367,11 +1672,17 @@ async function sendMessage(text) {
 
                 scrollToBottom(false);
 
+            } else if (data.type === "context_metrics") {
+                currentContextMetrics = data.context;
+                updateContextGaugeUI(currentContextMetrics);
+
             } else if (data.type === "error") {
                 throw new Error(data.message || "Engine error during generation");
 
             } else if (data.type === "done") {
                 $("model-status").textContent = "Ready";
+                streamingOutputTokens = 0;
+                refreshContextMetrics();
                 if (currentTurn.preToolEl && currentTurn.preToolText) {
                     currentTurn.preToolEl.innerHTML = renderMarkdown(currentTurn.preToolText, false);
                 }
@@ -1466,6 +1777,7 @@ async function sendMessage(text) {
         setSendButtonMode(false);
         $("model-selector").disabled = false;
         $("new-chat").disabled = false;
+        refreshContextMetrics();
 
         const input = $("message-input");
         input.focus();
@@ -1724,6 +2036,38 @@ $("clear-all-conversations")?.addEventListener("click", async () => {
 
 
 // --------------------------------------------------
+// CONTEXT GAUGE & SUMMARIZE EVENT LISTENERS
+// --------------------------------------------------
+
+$("context-gauge-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleContextGaugePopup();
+});
+
+$("topbar-context-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleContextGaugePopup();
+});
+
+$("summarize-btn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    handleSummarizeConversation();
+});
+
+// Dismiss popup on outside click
+document.addEventListener("click", (e) => {
+    const popup = $("context-gauge-popup");
+    if (!popup || popup.style.display === "none") return;
+
+    if (!popup.contains(e.target) &&
+        !e.target.closest("#context-gauge-btn") &&
+        !e.target.closest("#topbar-context-btn")) {
+        popup.style.display = "none";
+    }
+});
+
+
+// --------------------------------------------------
 // INITIALIZATION
 // --------------------------------------------------
 
@@ -1736,6 +2080,7 @@ async function initialize() {
 
         await loadModels();
         await loadConversations();
+        await refreshContextMetrics();
 
         const status = await api("/models/status");
         if (status.inference?.running) {

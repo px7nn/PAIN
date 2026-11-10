@@ -74,6 +74,12 @@
 
             <div class="topbar-right">
 
+                <button id="topbar-context-btn" class="topbar-context-btn" type="button" title="View context window telemetry">
+                    <span class="ctx-indicator-dot" id="topbar-ctx-dot"></span>
+                    <span id="topbar-ctx-text">Context: 0 / 8,192</span>
+                    <span class="ctx-badge" id="topbar-ctx-badge">0%</span>
+                </button>
+
                 <div class="model-select-wrapper">
                     <select id="model-selector" aria-label="Select model">
                         <option value="">Loading models...</option>
@@ -185,6 +191,20 @@
 
                     <div class="composer-bottom-bar">
                         <div class="composer-capabilities">
+                            <div class="context-gauge-wrap" id="context-gauge-wrap">
+                                <button id="context-gauge-btn" class="context-gauge-btn" type="button" title="Context window usage and telemetry" aria-label="Context usage">
+                                    <div class="gauge-dial-box">
+                                        <svg class="gauge-dial-svg" viewBox="0 0 32 32" width="16" height="16">
+                                            <circle class="gauge-track" cx="16" cy="16" r="11" stroke="currentColor" stroke-opacity="0.15" stroke-width="3" fill="none" />
+                                            <circle class="gauge-bar" id="gauge-bar" cx="16" cy="16" r="11" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-dasharray="69.115" stroke-dashoffset="69.115" transform="rotate(-90 16 16)" />
+                                        </svg>
+                                    </div>
+                                    <span class="gauge-label">Context</span>
+                                    <span class="gauge-val" id="gauge-val">0 / 8.2k</span>
+                                    <span class="gauge-percent-tag" id="gauge-percent-tag">0%</span>
+                                </button>
+                            </div>
+
                             <span class="cap-pill" title="DuckDuckGo Search Grounding">
                                 <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line></svg>
                                 Web Search
@@ -209,6 +229,89 @@
                     </div>
 
                 </form>
+
+                <!-- LLAMA.CPP STYLE REAL-TIME CONTEXT GAUGE & METRICS POPUP -->
+                <div id="context-gauge-popup" class="context-gauge-popup" style="display: none;">
+                    <div class="gauge-popup-header">
+                        <div class="gauge-header-title">
+                            <span class="gauge-title-label">Context</span>
+                            <span class="gauge-title-sep">·</span>
+                            <span class="gauge-title-val" id="popup-usage-fraction">0 / 8,192 tok</span>
+                        </div>
+                        <span class="gauge-header-tag level-ok" id="popup-level-tag">0.0% used</span>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="gauge-bar-track">
+                        <div class="gauge-bar-fill level-ok" id="popup-progress-fill" style="width: 0%"></div>
+                    </div>
+
+                    <div class="gauge-bar-meta">
+                        <span id="popup-meta-used">0.0% used</span>
+                        <span id="popup-meta-remaining">8,192 tok remaining</span>
+                    </div>
+
+                    <!-- Compact / Summarize Action Button (Llama.cpp summarize behavior) -->
+                    <div class="gauge-compact-box">
+                        <button id="summarize-btn" class="summarize-btn" type="button" title="Compact conversation history into a dense summary">
+                            <svg class="compact-icon" viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none">
+                                <polyline points="4 8 12 16 20 8"></polyline>
+                                <line x1="4" y1="4" x2="20" y2="4"></line>
+                                <line x1="4" y1="20" x2="20" y2="20"></line>
+                            </svg>
+                            <span id="summarize-btn-label">Summarize conversation</span>
+                        </button>
+                        <div class="compact-subtext" id="summarize-subtext">
+                            Condenses earlier turns into a dense brief so context drops back down to a fraction of the budget.
+                        </div>
+                    </div>
+
+                    <!-- Token Breakdown -->
+                    <div class="gauge-section-title">THIS CONTEXT WINDOW</div>
+                    <div class="gauge-detail-list">
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">History turns</span>
+                            <span class="detail-val" id="popup-history-tok">0 tok</span>
+                        </div>
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">Static personality</span>
+                            <span class="detail-val" id="popup-system-tok">0 tok</span>
+                        </div>
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">Tool schemas</span>
+                            <span class="detail-val" id="popup-tools-tok">0 tok</span>
+                        </div>
+                        <div class="gauge-detail-row" id="popup-summary-row" style="display: none;">
+                            <span class="detail-label">Compacted summary</span>
+                            <span class="detail-val text-green" id="popup-summary-tok">0 tok</span>
+                        </div>
+                    </div>
+
+                    <!-- Live llama-server Prometheus Telemetry (--metrics) -->
+                    <div class="gauge-section-title">LLAMA.CPP TELEMETRY (<span class="code-tag">--metrics</span>)</div>
+                    <div class="gauge-detail-list">
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">Generation speed</span>
+                            <span class="detail-val" id="popup-gen-speed">— tok/s</span>
+                        </div>
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">Prompt eval speed</span>
+                            <span class="detail-val" id="popup-eval-speed">— tok/s</span>
+                        </div>
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">KV cache tokens</span>
+                            <span class="detail-val" id="popup-kv-cache">— tok</span>
+                        </div>
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">Cumulative tokens generated</span>
+                            <span class="detail-val" id="popup-tokens-generated">— tok</span>
+                        </div>
+                        <div class="gauge-detail-row">
+                            <span class="detail-label">Cumulative prompt evaluated</span>
+                            <span class="detail-val" id="popup-prompt-evaluated">— tok</span>
+                        </div>
+                    </div>
+                </div>
 
             </div>
 

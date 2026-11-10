@@ -439,6 +439,154 @@ class Engine:
                     )
 
     # --------------------------------------------------
+    # CONTEXT METRICS & SUMMARIZATION
+    # --------------------------------------------------
+
+    def get_context_metrics(
+        self,
+        conversation_id: int | None = None,
+        model: str | None = None
+    ) -> dict:
+        """Fetch combined real-time context token metrics and llama-server telemetry"""
+        model_name = model or self.current_model
+        server_metrics = self.models.get_metrics()
+
+        if conversation_id is None:
+            model_info = self.config.get_model(model_name)
+            ctx_size = model_info.context_size
+            return {
+                "conversation_id": None,
+                "model": model_name,
+                "context_size": ctx_size,
+                "context_budget": ctx_size - self.config.inference.max_tokens - 256,
+                "context_used": 0,
+                "context_available": ctx_size,
+                "context_percent": 0.0,
+                "color_level": "ok",
+                "breakdown": {
+                    "system": 0,
+                    "env": 0,
+                    "tools": 0,
+                    "memory": 0,
+                    "summary": 0,
+                    "history": 0
+                },
+                "server_metrics": server_metrics,
+                "has_summary": False,
+                "summary_text": None,
+                "can_summarize": False,
+                "message_count": 0,
+                "omitted_messages": 0
+            }
+
+        metrics = self.context.get_context_metrics(
+            conversation_id=conversation_id,
+            model_name=model_name,
+            tools=self.tool_manager.get_tools()
+        )
+        metrics["server_metrics"] = server_metrics
+        return metrics
+
+    def summarize_conversation(
+        self,
+        conversation_id: int,
+        model: str | None = None
+    ) -> dict:
+        """Compact conversation by summarizing earlier history into dense prose"""
+        with self.lock:
+            if self._closed:
+               raise EngineError("Engine is closed.")
+
+            model_name = model or self.current_model
+            self.config.get_model(model_name)
+
+            conversation = self.conversations.get_conversation(conversation_id)
+            if conversation is None:
+                raise EngineError(f"Conversation not found: {conversation_id}")
+
+            raw_messages = self.conversations.get_messages(conversation_id)
+            chat_messages = [m for m in raw_messages if m["role"] in ("user", "assistant")]
+            if len(chat_messages) < 2:
+                raise EngineError("At least 2 messages are required to summarize a conversation.")
+
+            # Measure token usage before summarization
+            metrics_before = self.get_context_metrics(conversation_id, model_name)
+            tokens_before = metrics_before["context_used"]
+
+            # Cut messages: preserve the most recent 2 turns (or last 2 messages) if there are > 4 messages
+            if len(chat_messages) > 4:
+                to_summarize = chat_messages[:-2]
+            else:
+                to_summarize = chat_messages
+
+            transcript_lines = []
+            for m in to_summarize:
+                speaker = "User" if m["role"] == "user" else "Assistant"
+                content = (m["content"] or "").strip()
+                if content:
+                    transcript_lines.append(f"{speaker}: {content}")
+
+            transcript = "\n\n".join(transcript_lines)
+            compaction_prompt = (
+                "Summarize this conversation so it can seamlessly continue in a fresh context. "
+                "Capture: the overall goal, key facts and decisions, the current state of any ongoing work "
+                "(including code, file names, and data discussed), and what remains to be done. "
+                "Write the summary as dense prose addressed to the assistant that will resume the conversation. "
+                "Return ONLY the summary, nothing else."
+            )
+
+            summary = ""
+            try:
+                self._ensure_model(model_name)
+                prompt_messages = [
+                    {
+                        "role": "system",
+                        "content": "You are a concise technical summarizer. Provide high-density, accurate context summaries."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"[Conversation Transcript]\n{transcript}\n\n[Instruction]\n{compaction_prompt}"
+                    }
+                ]
+                result = self._generate(prompt_messages, model_name=model_name)
+                summary = (result.get("message", {}).get("content") or "").strip()
+            except Exception:
+                # Fallback extractive summary
+                lines = []
+                for m in to_summarize:
+                    c = m["content"].strip().splitlines()[0][:100]
+                    lines.append(f"• {m['role'].capitalize()}: {c}")
+                summary = "\n".join(lines[-8:])
+
+            if not summary:
+                raise EngineError("Failed to generate conversation summary.")
+
+            # Update summary in conversation record
+            self.conversations.update_summary(conversation_id, summary)
+
+            # Insert system landmark into conversation
+            self.conversations.add_message(
+                conversation_id=conversation_id,
+                role="system",
+                content=f"[Conversation Compacted]\nSummary of earlier exchange:\n{summary}"
+            )
+
+            # Measure token usage after summarization
+            metrics_after = self.get_context_metrics(conversation_id, model_name)
+            tokens_after = metrics_after["context_used"]
+
+            return {
+                "ok": True,
+                "conversation_id": conversation_id,
+                "model": model_name,
+                "summary": summary,
+                "tokens_before": tokens_before,
+                "tokens_after": tokens_after,
+                "saved_tokens": max(0, tokens_before - tokens_after),
+                "context": metrics_after
+            }
+
+    # --------------------------------------------------
     # MEMORY
     # --------------------------------------------------
 

@@ -1771,3 +1771,443 @@ summary.tool-activity-summary:hover {
         padding: 10px 12px 14px;
     }
 }
+
+
+/* -------------------------------------------------- */
+/* LLAMA.CPP CONTEXT GAUGE & REAL-TIME TELEMETRY      */
+/* -------------------------------------------------- */
+
+/* Topbar Context Pill */
+.topbar-context-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid var(--border);
+    color: #cbd5e1;
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.topbar-context-btn:hover {
+    background: var(--surface-hover);
+    border-color: var(--border-hover);
+    color: #ffffff;
+}
+
+.ctx-indicator-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+    transition: all 0.25s ease;
+}
+
+.ctx-indicator-dot.level-warning {
+    background: #f59e0b;
+    box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
+}
+
+.ctx-indicator-dot.level-critical {
+    background: #ef4444;
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+}
+
+.ctx-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+}
+
+/* Composer Context Gauge Button */
+.context-gauge-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
+.context-gauge-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #cbd5e1;
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.context-gauge-btn:hover {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: rgba(255, 255, 255, 0.16);
+    color: #ffffff;
+}
+
+.gauge-dial-box {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.gauge-dial-svg {
+    transform: rotate(0deg);
+}
+
+.gauge-track {
+    color: #64748b;
+}
+
+.gauge-bar {
+    color: #10b981;
+    transition: stroke-dashoffset 0.35s ease, color 0.25s ease;
+}
+
+.gauge-bar.level-warning {
+    color: #f59e0b;
+}
+
+.gauge-bar.level-critical {
+    color: #ef4444;
+}
+
+.gauge-label {
+    font-size: 10.5px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.gauge-val {
+    font-weight: 500;
+    color: #e2e8f0;
+}
+
+.gauge-percent-tag {
+    font-size: 9.5px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(16, 185, 129, 0.1);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    font-weight: 600;
+}
+
+.gauge-percent-tag.level-warning {
+    background: rgba(245, 158, 11, 0.12);
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.25);
+}
+
+.gauge-percent-tag.level-critical {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.3);
+}
+
+/* Floating Context Gauge Popup Card (Llama.cpp style) */
+.context-gauge-popup {
+    position: absolute;
+    bottom: 56px;
+    left: 12px;
+    z-index: 100;
+    width: 324px;
+    background: #0b0d13;
+    border: 1px solid #1e2433;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.04);
+    border-radius: 8px;
+    padding: 14px 16px;
+    animation: popupFadeIn 0.15s ease-out;
+}
+
+@keyframes popupFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.gauge-popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.gauge-header-title {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    font-family: var(--font-mono);
+}
+
+.gauge-title-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #f1f5f9;
+}
+
+.gauge-title-sep {
+    color: var(--muted);
+}
+
+.gauge-title-val {
+    font-size: 11.5px;
+    color: #94a3b8;
+}
+
+.gauge-header-tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.gauge-header-tag.level-ok {
+    background: rgba(16, 185, 129, 0.12);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.gauge-header-tag.level-warning {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.gauge-header-tag.level-critical {
+    background: rgba(239, 68, 68, 0.18);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.gauge-bar-track {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 6px;
+}
+
+.gauge-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s ease, background-color 0.25s ease;
+}
+
+.gauge-bar-fill.level-ok {
+    background: #10b981;
+}
+
+.gauge-bar-fill.level-warning {
+    background: #f59e0b;
+}
+
+.gauge-bar-fill.level-critical {
+    background: #ef4444;
+}
+
+.gauge-bar-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10.5px;
+    font-family: var(--font-mono);
+    color: var(--muted);
+    margin-bottom: 14px;
+}
+
+/* Compact / Summarize Button Box */
+.gauge-compact-box {
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.summarize-btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: #e2e8f0;
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.summarize-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: #ffffff;
+}
+
+.summarize-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.summarize-btn.loading .compact-icon {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.compact-subtext {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: #64748b;
+    margin-top: 5px;
+    line-height: 1.4;
+}
+
+/* Token Breakdown & Telemetry Rows */
+.gauge-section-title {
+    font-size: 9.5px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    color: #64748b;
+    letter-spacing: 0.8px;
+    margin: 10px 0 6px;
+}
+
+.gauge-section-title .code-tag {
+    color: #94a3b8;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 0 4px;
+    border-radius: 3px;
+}
+
+.gauge-detail-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.gauge-detail-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    font-family: var(--font-mono);
+}
+
+.detail-label {
+    color: #94a3b8;
+}
+
+.detail-val {
+    color: #f1f5f9;
+    font-variant-numeric: tabular-nums;
+}
+
+.text-green {
+    color: #10b981 !important;
+}
+
+/* Compaction Divider & Card in Message Feed */
+.message.compaction-message {
+    padding: 10px 0;
+    margin: 12px 0;
+}
+
+.compaction-divider-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    margin: 4px 0;
+}
+
+.compaction-divider-bar::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.07);
+    z-index: 1;
+}
+
+.compaction-pill {
+    position: relative;
+    z-index: 2;
+    background: #090a0d;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 20px;
+    padding: 3px 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: #94a3b8;
+}
+
+.compaction-pill svg {
+    color: #10b981;
+}
+
+.compaction-toggle-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #cbd5e1;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    padding: 1px 7px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.compaction-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #ffffff;
+}
+
+.compaction-card {
+    background: #0d1017;
+    border: 1px solid rgba(255, 255, 255, 0.065);
+    border-radius: 6px;
+    margin-top: 10px;
+    padding: 12px 14px;
+    font-size: 12.5px;
+    color: #cbd5e1;
+    animation: popupFadeIn 0.2s ease-out;
+}
+
+.compaction-card-header {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    color: #64748b;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    padding-bottom: 4px;
+}
