@@ -216,7 +216,7 @@ function setupMarkdownParser() {
     renderer.table = function(headerArg, bodyArg) {
         if (typeof headerArg === 'object' && headerArg !== null && !bodyArg) {
             const defaultTableHtml = marked.Renderer.prototype.table.call(this, headerArg);
-            return `<div class="table-wrapper">${defaultTableHtml}</div>`;
+            return `<div class="table-wrapper">${defaultTableHtml.replace(/^<table>/, '<table class="markdown-table">')}</div>`;
         }
         return `<div class="table-wrapper"><table class="markdown-table"><thead>${headerArg}</thead><tbody>${bodyArg}</tbody></table></div>`;
     };
@@ -230,6 +230,95 @@ function setupMarkdownParser() {
 
 // Initialize on script execution
 setupMarkdownParser();
+
+function isEscapedChar(str, index) {
+    let slashCount = 0;
+    for (let k = index - 1; k >= 0 && str[k] === "\\"; k--) {
+        slashCount++;
+    }
+    return slashCount % 2 === 1;
+}
+
+function isValidInlineMath(inner) {
+    if (!inner) return false;
+    const trimmed = inner.trim();
+    if (!trimmed) return false;
+
+    const hasLatexCmd = /\\[a-zA-Z]+/.test(trimmed);
+    const hasCoreMathOp = /[=^_<>+\*]/.test(trimmed);
+
+    // Reject trailing dangling binary operators after numbers (e.g. "$500 + $x")
+    if (/^\d[\d,]*(?:\.\d+)?\s*[+\-*/=,]$/.test(trimmed)) {
+        return false;
+    }
+
+    // Thousands-formatted currency numbers (e.g., "5,000 to", "100,000") without explicit math syntax
+    if (/^\d{1,3}(?:,\d{3})+(?:\.\d+)?(?:\s|$|[a-zA-Z),.;:!?])/.test(trimmed) && !hasLatexCmd && !hasCoreMathOp) {
+        return false;
+    }
+
+    // Currency-like numbers followed by whitespace/punctuation/prose (e.g., "$500 to", "$500. Let", "$500 USD")
+    // while allowing real math expressions starting with digits (e.g., "$2^3 = 8$", "$1 + 2 = 3$")
+    if (/^\d[\d,]*(?:\.\d+)?(?:\s|[.,;:!?\)\]\-\u2013\u2014\/]|$)/.test(trimmed)) {
+        if (!hasLatexCmd && !hasCoreMathOp) {
+            return false;
+        }
+        if (/[a-zA-Z]{2,}/.test(trimmed) && !hasLatexCmd && !/[=^_<>]/.test(trimmed)) {
+            return false;
+        }
+    }
+
+    // Multi-word prose chunks between literal dollar signs without LaTeX commands or core math syntax
+    if (!hasLatexCmd && !/[=^_<>]/.test(trimmed)) {
+        const words = trimmed.match(/\b[a-zA-Z]{2,}\b/g);
+        if (words && words.length >= 2) {
+            return false;
+        }
+        if (/[a-zA-Z]{2,}\s+$/.test(inner)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+function extractInlineDollarMath(line, inlines) {
+    let out = "";
+    let i = 0;
+    const n = line.length;
+
+    while (i < n) {
+        if (line[i] === "$" && !isEscapedChar(line, i) && line[i + 1] !== "$") {
+            let j = i + 1;
+            let matched = false;
+
+            while (j < n) {
+                if (line[j] === "$" && !isEscapedChar(line, j)) {
+                    // Never close inline math at '$$' or a currency '$2000' followed immediately by a digit
+                    if (line[j + 1] === "$" || /\d/.test(line[j + 1] || "")) {
+                        break;
+                    }
+                    const inner = line.slice(i + 1, j);
+                    if (isValidInlineMath(inner)) {
+                        inlines.push(inner.trim());
+                        out += `@@PAINMATHI${inlines.length - 1}@@`;
+                        i = j + 1;
+                        matched = true;
+                    }
+                    break;
+                }
+                j++;
+            }
+
+            if (matched) continue;
+        }
+
+        out += line[i];
+        i++;
+    }
+
+    return out;
+}
 
 function renderMathExpression(expr, displayMode = false) {
     if (window.katex && typeof window.katex.renderToString === "function") {
@@ -257,37 +346,36 @@ function extractMathAndPlaceholders(text) {
     const codes = [];
 
     // 1. Temporarily shield multi-line and inline code blocks so backticks and internal $ are preserved
-    let shielded = text.replace(/```[\s\S]*?```/g, (m) => {
+    let shielded = text.replace(/```[\s\S]*?```|~~~[\s\S]*?~~~|`+[^`\n]+?`+/g, (m) => {
         codes.push(m);
-        return `%%%CODE_PLACEHOLDER_${codes.length - 1}%%%`;
-    }).replace(/`[^`\n]+`/g, (m) => {
-        codes.push(m);
-        return `%%%CODE_PLACEHOLDER_${codes.length - 1}%%%`;
+        return `@@PAINCODE${codes.length - 1}@@`;
     });
 
-    // 2. Extract display/block math: $$...$$
+    // 2. Extract display/block math: $$...$$ and \[...\]
     shielded = shielded.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => {
         blocks.push(expr.trim());
-        return `%%%MATH_BLOCK_${blocks.length - 1}%%%`;
+        return `@@PAINMATHB${blocks.length - 1}@@`;
+    });
+    shielded = shielded.replace(/(?<!\\)\\\[([\s\S]+?)(?<!\\)\\\]/g, (m, expr) => {
+        if (!expr.trim()) return m;
+        blocks.push(expr.trim());
+        return `@@PAINMATHB${blocks.length - 1}@@`;
     });
 
-    // 3. Extract inline math / placeholders: $...$
-    // Exclude currency ranges like "$10 to $20" or "$50 and $100"
-    shielded = shielded.replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, (m, expr) => {
-        const trimmed = expr.trim();
-        if (!trimmed) return m;
-
-        // Skip currency descriptions like "$10 to" or "$50 and"
-        if (/^\d+(\.\d+)?\s*(?:and|or|to|,|-)\s*$/i.test(trimmed)) {
-            return m;
-        }
-
-        inlines.push(trimmed);
-        return `%%%MATH_INLINE_${inlines.length - 1}%%%`;
+    // 3. Extract inline math: \(...\) and valid $...$
+    shielded = shielded.replace(/(?<!\\)\\\(([^\n]+?)(?<!\\)\\\)/g, (m, expr) => {
+        if (!expr.trim()) return m;
+        inlines.push(expr.trim());
+        return `@@PAINMATHI${inlines.length - 1}@@`;
     });
+
+    shielded = shielded
+        .split("\n")
+        .map((line) => (line.includes("$") ? extractInlineDollarMath(line, inlines) : line))
+        .join("\n");
 
     // 4. Restore shielded code blocks
-    shielded = shielded.replace(/%%%CODE_PLACEHOLDER_(\d+)%%%/g, (_, idx) => codes[Number(idx)]);
+    shielded = shielded.replace(/@@PAINCODE(\d+)@@/g, (_, idx) => codes[Number(idx)]);
 
     return { text: shielded, blocks, inlines };
 }
@@ -352,11 +440,11 @@ function renderMarkdown(text, isStreaming = false) {
     }
 
     // Unwrap paragraph around standalone display math blocks
-    html = html.replace(/<p>\s*(%%%MATH_BLOCK_\d+%%%)\s*<\/p>/g, "$1");
+    html = html.replace(/<p>\s*(@@PAINMATHB\d+@@)\s*<\/p>/g, "$1");
 
     // Substitute math expressions
-    html = html.replace(/%%%MATH_BLOCK_(\d+)%%%/g, (_, i) => renderMathExpression(blocks[Number(i)] || "", true));
-    html = html.replace(/%%%MATH_INLINE_(\d+)%%%/g, (_, i) => renderMathExpression(inlines[Number(i)] || "", false));
+    html = html.replace(/@@PAINMATHB(\d+)@@/g, (_, i) => renderMathExpression(blocks[Number(i)] || "", true));
+    html = html.replace(/@@PAINMATHI(\d+)@@/g, (_, i) => renderMathExpression(inlines[Number(i)] || "", false));
 
     return html;
 }

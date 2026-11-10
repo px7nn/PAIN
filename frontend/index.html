@@ -190,33 +190,18 @@
                     </div>
 
                     <div class="composer-bottom-bar">
-                        <div class="composer-capabilities">
-                            <div class="context-gauge-wrap" id="context-gauge-wrap">
-                                <button id="context-gauge-btn" class="context-gauge-btn" type="button" title="Context window usage and telemetry" aria-label="Context usage">
-                                    <div class="gauge-dial-box">
-                                        <svg class="gauge-dial-svg" viewBox="0 0 32 32" width="16" height="16">
-                                            <circle class="gauge-track" cx="16" cy="16" r="11" stroke="currentColor" stroke-opacity="0.15" stroke-width="3" fill="none" />
-                                            <circle class="gauge-bar" id="gauge-bar" cx="16" cy="16" r="11" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-dasharray="69.115" stroke-dashoffset="69.115" transform="rotate(-90 16 16)" />
-                                        </svg>
-                                    </div>
-                                    <span class="gauge-label">Context</span>
-                                    <span class="gauge-val" id="gauge-val">0 / 8.2k</span>
-                                    <span class="gauge-percent-tag" id="gauge-percent-tag">0%</span>
-                                </button>
-                            </div>
-
-                            <span class="cap-pill" title="DuckDuckGo Search Grounding">
-                                <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line></svg>
-                                Web Search
-                            </span>
-                            <span class="cap-pill" title="Persistent Semantic Storage">
-                                <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
-                                Chroma Memory
-                            </span>
-                            <span class="cap-pill" title="Local System Telemetry">
-                                <svg viewBox="0 0 24 24" width="11" height="11" stroke="currentColor" stroke-width="2" fill="none"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect></svg>
-                                Telemetry
-                            </span>
+                        <div class="context-gauge-wrap" id="context-gauge-wrap">
+                            <button id="context-gauge-btn" class="context-gauge-btn" type="button" title="Context window usage and telemetry" aria-label="Context usage">
+                                <span class="gauge-dial-box">
+                                    <svg class="gauge-dial-svg" viewBox="0 0 32 32" width="16" height="16">
+                                        <circle class="gauge-track" cx="16" cy="16" r="11" stroke="currentColor" stroke-opacity="0.15" stroke-width="3" fill="none" />
+                                        <circle class="gauge-bar" id="gauge-bar" cx="16" cy="16" r="11" stroke="currentColor" stroke-width="3" fill="none" stroke-linecap="round" stroke-dasharray="69.115" stroke-dashoffset="69.115" transform="rotate(-90 16 16)" />
+                                    </svg>
+                                </span>
+                                <span class="gauge-label">Context</span>
+                                <span class="gauge-val" id="gauge-val">0 / 8.2k</span>
+                                <span class="gauge-percent-tag" id="gauge-percent-tag">0%</span>
+                            </button>
                         </div>
 
                         <div class="composer-controls">
