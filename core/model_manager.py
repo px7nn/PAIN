@@ -59,6 +59,9 @@ class ModelManager:
             "-ngl", str(inference.gpu_layers),
             "-c",   str(model.context_size),
             "-t",   str(inference.threads),
+            "-fa",  inference.flash_attn,
+            "-ctk", inference.cache_type_k,
+            "-ctv", inference.cache_type_v,
 
             "-np", "1",
 

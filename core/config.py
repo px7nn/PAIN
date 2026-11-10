@@ -38,6 +38,10 @@ class InferenceConfig:
     top_p : float
     top_k : int
     min_p : float
+
+    flash_attn   : str = "on"
+    cache_type_k : str = "q8_0"
+    cache_type_v : str = "q8_0"
     
     
 @dataclass
@@ -131,6 +135,23 @@ class Config:
     def _load_inference(self):
         inference = self.raw.get("inference", {})
 
+        flash_attn   = str(inference.get("flash_attn",   "on")).strip().lower()
+        cache_type_k = str(inference.get("cache_type_k", "q8_0")).strip().lower()
+        cache_type_v = str(inference.get("cache_type_v", "q8_0")).strip().lower()
+
+        if flash_attn not in {"on", "off", "auto"}:
+            raise ConfigError(
+                f"Invalid [inference] flash_attn '{flash_attn}'. Expected: on, off, auto."
+            )
+
+        valid_kv_types = {"f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"}
+        if cache_type_k not in valid_kv_types:
+            raise ConfigError(f"Invalid [inference] cache_type_k: {cache_type_k}")
+        if cache_type_v not in valid_kv_types:
+            raise ConfigError(f"Invalid [inference] cache_type_v: {cache_type_v}")
+        if flash_attn == "off" and cache_type_v not in {"f32", "f16", "bf16"}:
+            raise ConfigError("Quantized cache_type_v requires flash_attn enabled (on or auto).")
+
         self.inference = InferenceConfig(
             default_model = self._require(inference, "default_model", "inference"),
             
@@ -141,7 +162,11 @@ class Config:
             
             top_p = self._require(inference, "top_p", "inference"),
             top_k = self._require(inference, "top_k", "inference"),
-            min_p = self._require(inference, "min_p", "inference")
+            min_p = self._require(inference, "min_p", "inference"),
+
+            flash_attn   = flash_attn,
+            cache_type_k = cache_type_k,
+            cache_type_v = cache_type_v
         )
 
         if self.inference.default_model not in self.models:
