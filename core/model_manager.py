@@ -74,6 +74,8 @@ class ModelManager:
             "--min-p", str(inference.min_p),
             "--jinja",
             "--reasoning", "off",
+            "--reasoning-budget", "0",
+            "--no-reasoning-preserve",
             "--metrics",
         ]
 

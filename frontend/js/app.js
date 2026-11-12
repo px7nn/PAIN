@@ -10,6 +10,9 @@ let abortController = null;
 let systemTimer = null;
 let activeToolActivities = new Map();
 let previousModel = "";
+let availableModels = [];
+let modelsDirPath = "";
+let switchingModelName = null;
 let pendingAttachments = [];
 let nextAttachmentSeq = 1;
 let dragDepth = 0;
@@ -794,18 +797,131 @@ document.querySelectorAll(".nav-item").forEach(button => {
 // MODELS
 // --------------------------------------------------
 
+function formatModelSize(bytes) {
+    if (!bytes || bytes <= 0) return "";
+    const gb = bytes / (1024 * 1024 * 1024);
+    return gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+function renderWelcomeModels() {
+    const grid = $("welcome-model-grid");
+    const hint = $("welcome-models-hint");
+    if (!grid) return;
+
+    if (hint) {
+        hint.textContent = modelsDirPath
+            ? `Click to select model · Path: ${modelsDirPath}`
+            : "Select a local model to load for this session";
+    }
+
+    grid.replaceChildren();
+
+    if (!Array.isArray(availableModels) || availableModels.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "model-card-empty";
+        empty.textContent = "No GGUF models detected in configured models directory.";
+        grid.appendChild(empty);
+        return;
+    }
+
+    const active = $("model-selector")?.value || previousModel;
+
+    availableModels.forEach(model => {
+        const isActive = model.name === active;
+        const isSwitching = switchingModelName === model.name;
+        const isAvailable = model.available !== false;
+
+        const card = document.createElement("button");
+        card.type = "button";
+        card.className = `model-card${isActive ? " active" : ""}${isSwitching ? " switching" : ""}`;
+        card.dataset.modelName = model.name;
+        if (!isAvailable || (switchingModelName && !isSwitching)) {
+            card.disabled = true;
+        }
+
+        const quantLabel = model.quantization || "GGUF";
+        const ctxLabel = model.context_size ? `${Math.round(model.context_size / 1024)}k ctx` : "";
+        const sizeLabel = formatModelSize(model.size_bytes);
+        const metaText = [sizeLabel, ctxLabel].filter(Boolean).join(" · ");
+
+        let statusHtml = `<span>Select ↵</span>`;
+        if (!isAvailable) {
+            statusHtml = `<span>Missing file</span>`;
+        } else if (isSwitching) {
+            statusHtml = `<span>Loading...</span>`;
+        } else if (isActive) {
+            statusHtml = `<span class="model-active-dot"></span><span>ACTIVE</span>`;
+        }
+
+        card.innerHTML = `
+            <div class="model-card-header">
+                <span class="model-quant-pill">${escapeHtml(quantLabel)}</span>
+                <span class="model-card-status">${statusHtml}</span>
+            </div>
+            <div class="model-card-title">${escapeHtml(model.name)}</div>
+            <div class="model-card-role">${escapeHtml(model.role || "Local inference")}</div>
+            <div class="model-card-meta">${escapeHtml(metaText || model.file || "")}</div>
+        `;
+
+        grid.appendChild(card);
+    });
+}
+
+async function selectModel(newModel) {
+    if (!newModel || isGenerating || switchingModelName) return;
+
+    const selector = $("model-selector");
+    if (newModel === previousModel) {
+        renderWelcomeModels();
+        $("message-input")?.focus();
+        return;
+    }
+
+    switchingModelName = newModel;
+    renderWelcomeModels();
+    if (selector) selector.disabled = true;
+    $("model-status").textContent = "Switching...";
+
+    try {
+        await api("/models/switch", {
+            method: "POST",
+            body: JSON.stringify({ model: newModel })
+        });
+
+        previousModel = newModel;
+        if (selector) selector.value = newModel;
+        $("model-status").textContent = "Ready";
+        await refreshContextMetrics(activeConversation, newModel);
+    } catch (error) {
+        $("model-status").textContent = "Error";
+        if (selector) selector.value = previousModel;
+        alert(`Failed to switch model: ${error.message}`);
+    } finally {
+        switchingModelName = null;
+        if (selector) selector.disabled = false;
+        renderWelcomeModels();
+        $("message-input")?.focus();
+    }
+}
+
 async function loadModels() {
     try {
         const data = await api("/models");
         const selector = $("model-selector");
         selector.replaceChildren();
 
-        if (Array.isArray(data.models) && data.models.length > 0) {
-            data.models.forEach(model => {
+        availableModels = Array.isArray(data.models) ? data.models : [];
+        modelsDirPath = data.model_dir || "";
+
+        if (availableModels.length > 0) {
+            availableModels.forEach(model => {
                 const option = document.createElement("option");
                 option.value = model.name;
 
                 let desc = model.name;
+                if (model.role) {
+                    desc += ` · ${model.role}`;
+                }
                 if (model.context_size) {
                     desc += ` · ${(model.context_size / 1024).toFixed(0)}k`;
                 }
@@ -823,34 +939,20 @@ async function loadModels() {
                 previousModel = data.active_model;
             }
         }
+
+        renderWelcomeModels();
     } catch (err) {
         console.warn("Could not load dynamic models list:", err);
     }
 }
 
 $("model-selector").addEventListener("change", async event => {
-    if (isGenerating) {
+    if (isGenerating || switchingModelName) {
         event.target.value = previousModel;
         return;
     }
 
-    const newModel = event.target.value;
-    $("model-status").textContent = "Switching...";
-
-    try {
-        await api("/models/switch", {
-            method: "POST",
-            body: JSON.stringify({ model: newModel })
-        });
-
-        previousModel = newModel;
-        $("model-status").textContent = "Ready";
-        await refreshContextMetrics(activeConversation, newModel);
-    } catch (error) {
-        $("model-status").textContent = "Error";
-        event.target.value = previousModel;
-        alert(`Failed to switch model: ${error.message}`);
-    }
+    await selectModel(event.target.value);
 });
 
 
@@ -1030,51 +1132,18 @@ function clearMessages() {
             </div>
 
             <div class="hud-section-header">
-                <span class="hud-section-label">COMMAND SHORTCUTS</span>
-                <span class="hud-section-hint">Click to populate prompt or press Enter in composer</span>
+                <span class="hud-section-label">LOCAL MODELS</span>
+                <span class="hud-section-hint" id="welcome-models-hint">Select a local model to load for this session</span>
             </div>
 
-            <div class="suggestion-grid">
-                <button class="suggestion-card" type="button" data-prompt="What festival or holiday was yesterday?">
-                    <div class="suggestion-card-header">
-                        <span class="suggestion-cmd">/temporal</span>
-                        <span class="suggestion-action-hint">Run ↵</span>
-                    </div>
-                    <div class="suggestion-title">Check Recent Festivals & Holidays</div>
-                    <div class="suggestion-desc">Query calendar anchor and real-time external festival events</div>
-                </button>
-
-                <button class="suggestion-card" type="button" data-prompt="Search your persistent memory for my saved preferences">
-                    <div class="suggestion-card-header">
-                        <span class="suggestion-cmd">/memory</span>
-                        <span class="suggestion-action-hint">Run ↵</span>
-                    </div>
-                    <div class="suggestion-title">Query Long-Term Semantic Memory</div>
-                    <div class="suggestion-desc">Retrieve stored user preferences, profile context, and notes</div>
-                </button>
-
-                <button class="suggestion-card" type="button" data-prompt="Write a Python script to monitor system CPU and RAM and alert when high">
-                    <div class="suggestion-card-header">
-                        <span class="suggestion-cmd">/script</span>
-                        <span class="suggestion-action-hint">Run ↵</span>
-                    </div>
-                    <div class="suggestion-title">Generate Telemetry Monitor</div>
-                    <div class="suggestion-desc">Synthesize production-grade Python scripts with syntax formatting</div>
-                </button>
-
-                <button class="suggestion-card" type="button" data-prompt="Search the web for the latest advancements in local AI inference">
-                    <div class="suggestion-card-header">
-                        <span class="suggestion-cmd">/search</span>
-                        <span class="suggestion-action-hint">Run ↵</span>
-                    </div>
-                    <div class="suggestion-title">Real-Time Web Intelligence</div>
-                    <div class="suggestion-desc">DuckDuckGo live retrieval with grounded synthesis and citations</div>
-                </button>
+            <div class="model-card-grid" id="welcome-model-grid">
+                <div class="model-card-empty">Discovering local models...</div>
             </div>
         </div>
     `;
 
     $("messages").appendChild(welcome);
+    renderWelcomeModels();
 }
 
 async function openConversation(id) {
@@ -1252,15 +1321,10 @@ $("messages").addEventListener("click", (event) => {
         return;
     }
 
-    // 0.5. Suggestion card click
-    const card = event.target.closest(".suggestion-card");
-    if (card && card.dataset.prompt) {
-        const input = $("message-input");
-        if (input && !isGenerating) {
-            input.value = card.dataset.prompt;
-            input.dispatchEvent(new Event("input"));
-            input.focus();
-        }
+    // 0.5. Welcome model card click
+    const modelCard = event.target.closest(".model-card");
+    if (modelCard && modelCard.dataset.modelName) {
+        selectModel(modelCard.dataset.modelName);
         return;
     }
 
@@ -1801,6 +1865,20 @@ async function sendMessage(text, attachments = []) {
                 currentContextMetrics = data.context;
                 updateContextGaugeUI(currentContextMetrics);
 
+            } else if (data.type === "truncated") {
+                const turn = getOrCreateAssistantTurn();
+                const targetEl = turn.postToolEl || turn.preToolEl;
+                const notice = "\n\n*[Output truncated at max response token limit — send \"continue\" to keep going.]*";
+                if (targetEl) {
+                    if (turn.hasTools) {
+                        turn.postToolText += notice;
+                        targetEl.innerHTML = renderMarkdown(turn.postToolText, false);
+                    } else {
+                        turn.preToolText += notice;
+                        targetEl.innerHTML = renderMarkdown(turn.preToolText, false);
+                    }
+                }
+
             } else if (data.type === "error") {
                 throw new Error(data.message || "Engine error during generation");
 
@@ -1835,12 +1913,14 @@ async function sendMessage(text, attachments = []) {
             if (dataLines.length === 0) return;
 
             const dataStr = dataLines.join("\n");
+            let data;
             try {
-                const data = JSON.parse(dataStr);
-                handleSSEData(data);
+                data = JSON.parse(dataStr);
             } catch (err) {
                 console.warn("Failed to parse SSE JSON:", dataStr, err);
+                return;
             }
+            handleSSEData(data);
         };
 
         while (true) {

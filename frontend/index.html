@@ -128,46 +128,12 @@
                         </div>
 
                         <div class="hud-section-header">
-                            <span class="hud-section-label">COMMAND SHORTCUTS</span>
-                            <span class="hud-section-hint">Click to populate prompt or press Enter in composer</span>
+                            <span class="hud-section-label">LOCAL MODELS</span>
+                            <span class="hud-section-hint" id="welcome-models-hint">Select a local model to load for this session</span>
                         </div>
 
-                        <div class="suggestion-grid">
-                            <button class="suggestion-card" type="button" data-prompt="What festival or holiday was yesterday?">
-                                <div class="suggestion-card-header">
-                                    <span class="suggestion-cmd">/temporal</span>
-                                    <span class="suggestion-action-hint">Run ↵</span>
-                                </div>
-                                <div class="suggestion-title">Check Recent Festivals & Holidays</div>
-                                <div class="suggestion-desc">Query calendar anchor and real-time external festival events</div>
-                            </button>
-
-                            <button class="suggestion-card" type="button" data-prompt="Search your persistent memory for my saved preferences">
-                                <div class="suggestion-card-header">
-                                    <span class="suggestion-cmd">/memory</span>
-                                    <span class="suggestion-action-hint">Run ↵</span>
-                                </div>
-                                <div class="suggestion-title">Query Long-Term Semantic Memory</div>
-                                <div class="suggestion-desc">Retrieve stored user preferences, profile context, and notes</div>
-                            </button>
-
-                            <button class="suggestion-card" type="button" data-prompt="Write a Python script to monitor system CPU and RAM and alert when high">
-                                <div class="suggestion-card-header">
-                                    <span class="suggestion-cmd">/script</span>
-                                    <span class="suggestion-action-hint">Run ↵</span>
-                                </div>
-                                <div class="suggestion-title">Generate Telemetry Monitor</div>
-                                <div class="suggestion-desc">Synthesize production-grade Python scripts with syntax formatting</div>
-                            </button>
-
-                            <button class="suggestion-card" type="button" data-prompt="Search the web for the latest advancements in local AI inference">
-                                <div class="suggestion-card-header">
-                                    <span class="suggestion-cmd">/search</span>
-                                    <span class="suggestion-action-hint">Run ↵</span>
-                                </div>
-                                <div class="suggestion-title">Real-Time Web Intelligence</div>
-                                <div class="suggestion-desc">DuckDuckGo live retrieval with grounded synthesis and citations</div>
-                            </button>
+                        <div class="model-card-grid" id="welcome-model-grid">
+                            <div class="model-card-empty">Discovering local models...</div>
                         </div>
 
                     </div>

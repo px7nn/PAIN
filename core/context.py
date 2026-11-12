@@ -266,49 +266,48 @@ class ContextManager:
         context_size, budget = self._get_budget(model_name)
 
         # --- Immutable Static Root System Prompt ---
-        
-        # Pure static persona text with NO volatile memories appended to guarantee KV-cache reuse
+        # Merge all system sections into ONE role="system" message at index 0.
+        # Strict templates (e.g. Qwen3.5) reject additional system messages after loop.first,
+        # while prefix ordering inside message[0] preserves llama.cpp KV-cache reuse.
         system_content = self.load_personality(model_name)
-        root_system_message = {
-            "role": "system",
-            "content": system_content
-        }
-        system_tokens = self._message_tokens(root_system_message)
+        system_tokens = self.estimate_tokens(system_content) + 4
 
         if system_tokens >= budget:
             raise ContextError("Personality exceeds the available context budget.")
 
         # Real-time environment and calendar context (stable by day to maximize KV-cache reuse)
         now = datetime.now().astimezone()
-        env_message = {
-            "role": "system",
-            "content": (
-                "[System Environment & Real-Time Context]\n"
-                f"Current Date: {now.strftime('%A, %B %d, %Y')}\n"
-                f"Local Timezone: {now.tzname() or 'Local'} (UTC{now.strftime('%z')})"
-            )
-        }
-        env_tokens = self._message_tokens(env_message)
+        env_section = (
+            "[System Environment & Real-Time Context]\n"
+            f"Current Date: {now.strftime('%A, %B %d, %Y')}\n"
+            f"Local Timezone: {now.tzname() or 'Local'} (UTC{now.strftime('%z')})"
+        )
+        env_tokens = self.estimate_tokens(env_section)
 
         # Dynamic Tool Schemas Reservation
         tool_tokens = self._tool_tokens(tools)
 
-        # Gated Memory Reference Block (Separated from root persona)
-        memory_message = None
+        # Gated Memory Reference Block
+        memory_section = None
         memory_tokens = 0
         if memory_context and memory_context.strip():
             # Cap memory block to ~250 tokens
             clean_mem = memory_context.strip()
-            memory_message = {
-                "role": "system",
-                "content": (
-                    "[Stored Memory & Context]\n"
-                    "Background reference facts retrieved from past interactions. "
-                    "Current user instructions take precedence:\n"
-                    f"{clean_mem}"
-                )
-            }
-            memory_tokens = self._message_tokens(memory_message)
+            memory_section = (
+                "[Stored Memory & Context]\n"
+                "Background reference facts retrieved from past interactions. "
+                "Current user instructions take precedence:\n"
+                f"{clean_mem}"
+            )
+            memory_tokens = self.estimate_tokens(memory_section)
+
+        # Check if an explicit or stored summary exists for this conversation
+        stored_summary = self.conversations.get_summary(conversation_id)
+        summary_section = None
+        summary_tokens = 0
+        if stored_summary:
+            summary_section = f"[Earlier Conversation Summary]\n{stored_summary}"
+            summary_tokens = self.estimate_tokens(summary_section)
 
         # Retrieve conversation history (excluding system messages)
         raw_history = self.conversations.get_messages(conversation_id)
@@ -319,15 +318,14 @@ class ContextManager:
         
         # Reserve headroom for multi-round agent tool calls (e.g. 600 tokens)
         agent_working_headroom = 600 if tools else 0
-        static_overhead = system_tokens + env_tokens + tool_tokens + memory_tokens + agent_working_headroom
+        static_overhead = (
+            system_tokens + env_tokens + tool_tokens + memory_tokens + summary_tokens + agent_working_headroom
+        )
 
         available_for_history = budget - static_overhead
         if available_for_history < 400:
             # Squeeze agent headroom if context is very constrained
-            available_for_history = budget - (system_tokens + tool_tokens + memory_tokens)
-
-        # Check if an explicit or stored summary exists for this conversation
-        stored_summary = self.conversations.get_summary(conversation_id)
+            available_for_history = budget - (system_tokens + env_tokens + tool_tokens + memory_tokens + summary_tokens)
 
         # Check for compaction landmark boundary
         compaction_boundary_idx = -1
@@ -383,43 +381,29 @@ class ContextManager:
         selected_recent.reverse()
 
         # Rolling Conversation Summary for Compacted Messages
-        summary_message = None
-        summary_tokens = 0
-
-        if stored_summary:
-            summary_message = {
-                "role": "system",
-                "content": f"[Earlier Conversation Summary]\n{stored_summary}"
-            }
-            summary_tokens = self._message_tokens(summary_message)
-        elif omitted_messages:
+        if not summary_section and omitted_messages:
             auto_summary = self._compact_older_messages(omitted_messages)
             if auto_summary:
                 try:
                     self.conversations.update_summary(conversation_id, auto_summary)
                 except Exception:
                     pass
-                summary_message = {
-                    "role": "system",
-                    "content": f"[Earlier Conversation Summary]\n{auto_summary}"
-                }
-                summary_tokens = self._message_tokens(summary_message)
+                summary_section = f"[Earlier Conversation Summary]\n{auto_summary}"
+                summary_tokens = self.estimate_tokens(summary_section)
 
         # Assemble Final Ordered Context Window
-        # Ordering preserves KV cache:
-        # [0]: Immutable root personality (100% static)
-        # [1]: Real-time environment and calendar context (stable by day)
-        # [2]: Stored reference memory (if any)
-        # [3]: Earlier conversation summary (if any)
-        # [4..N]: Recent verbatim user and assistant turns
-        assembled_messages: list[dict] = [root_system_message, env_message]
+        # Single system message preserves KV-cache prefix and satisfies strict templates (Qwen3.5, LFM2.5, etc.):
+        #   [0].system sections: root personality -> daily env context -> pinned memory -> rolling summary
+        #   [1..N]: Recent verbatim user and assistant turns
+        system_sections = [system_content, env_section]
+        if memory_section:
+            system_sections.append(memory_section)
+        if summary_section:
+            system_sections.append(summary_section)
 
-        if memory_message:
-            assembled_messages.append(memory_message)
-
-        if summary_message:
-            assembled_messages.append(summary_message)
-
+        assembled_messages: list[dict] = [
+            {"role": "system", "content": "\n\n".join(system_sections)}
+        ]
         assembled_messages.extend(selected_recent)
 
         total_estimated = (
@@ -460,17 +444,14 @@ class ContextManager:
         context_size, budget = self._get_budget(model_name)
 
         system_content = self.load_personality(model_name)
-        system_tokens = self._message_tokens({"role": "system", "content": system_content})
+        system_tokens = self.estimate_tokens(system_content) + 4
 
         now = datetime.now().astimezone()
-        env_tokens = self._message_tokens({
-            "role": "system",
-            "content": (
-                "[System Environment & Real-Time Context]\n"
-                f"Current Date: {now.strftime('%A, %B %d, %Y')}\n"
-                f"Local Timezone: {now.tzname() or 'Local'} (UTC{now.strftime('%z')})"
-            )
-        })
+        env_tokens = self.estimate_tokens(
+            "[System Environment & Real-Time Context]\n"
+            f"Current Date: {now.strftime('%A, %B %d, %Y')}\n"
+            f"Local Timezone: {now.tzname() or 'Local'} (UTC{now.strftime('%z')})"
+        )
 
         tool_tokens = self._tool_tokens(tools)
 
@@ -480,10 +461,7 @@ class ContextManager:
         stored_summary = self.conversations.get_summary(conversation_id)
         summary_tokens = 0
         if stored_summary:
-            summary_tokens = self._message_tokens({
-                "role": "system",
-                "content": f"[Earlier Conversation Summary]\n{stored_summary}"
-            })
+            summary_tokens = self.estimate_tokens(f"[Earlier Conversation Summary]\n{stored_summary}")
 
         raw_history = self.conversations.get_messages(conversation_id)
         history = [m for m in raw_history if m["role"] != "system"]

@@ -13,7 +13,9 @@ venv/
 logs/*.log
 logs/*.log.*
 
-# Generated model files
+# Generated & downloaded model files
 *.gguf
+models/*
+!models/.gitkeep
 
 tests/

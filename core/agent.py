@@ -140,7 +140,7 @@ class Agent:
 
             # No tool calls: final response
             if not tool_calls:
-                content = assistant.get("content") or ""
+                content = assistant.get("content") or assistant.get("reasoning_content") or ""
 
                 return AgentResponse(
                     content=content,
@@ -195,6 +195,8 @@ class Agent:
 
         for _ in range(self.max_tool_rounds + 1):
             round_content = ""
+            round_reasoning = ""
+            last_finish_reason = None
             tool_calls = {}
 
             for chunk in self.generate_stream(
@@ -202,8 +204,15 @@ class Agent:
                 model_name=model_name,
                 tools=available_tools
             ):
+                if chunk.get("finish_reason"):
+                    last_finish_reason = chunk.get("finish_reason")
+
                 delta = chunk.get("delta") or {}
                 content = delta.get("content")
+                reasoning = delta.get("reasoning_content")
+
+                if reasoning:
+                    round_reasoning += reasoning
 
                 if content:
                     round_content += content
@@ -227,6 +236,10 @@ class Agent:
                         current["function"]["arguments"] += function["arguments"]
 
             if not tool_calls:
+                if not round_content and round_reasoning:
+                    yield {"type": "token", "content": round_reasoning}
+                if last_finish_reason == "length":
+                    yield {"type": "truncated", "finish_reason": "length"}
                 return
 
             assembled_calls = [tool_calls[index] for index in sorted(tool_calls)]

@@ -10,17 +10,26 @@ router = APIRouter(prefix="/api/models", tags=["Models"])
 @router.get("")
 def list_models(request: Request):
     engine = request.app.state.engine
+    models = engine.config.refresh_models()
+
+    if engine.current_model not in models and models:
+        engine.current_model = engine.config.inference.default_model
 
     return {
         "models": [
             {
                 "name": name,
                 "file": model.file,
-                "context_size": model.context_size
+                "role": model.role,
+                "quantization": model.quantization,
+                "context_size": model.context_size,
+                "size_bytes": model.size_bytes,
+                "available": model.available,
             }
-            for name, model in engine.config.models.items()
+            for name, model in models.items()
         ],
-        "active_model": engine.current_model
+        "active_model": engine.current_model,
+        "model_dir": str(engine.config.model_dir),
     }
 
 
