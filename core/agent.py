@@ -51,8 +51,8 @@ class Agent:
         self,
         tool_manager,
         generate,
-        max_tool_rounds: int = 5,
-        max_tool_calls: int = 8,
+        max_tool_rounds: int = 20,
+        max_tool_calls: int = 20,
         generate_stream=None
     ):
         self.tool_manager = tool_manager
