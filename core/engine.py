@@ -35,7 +35,10 @@ class Engine:
         )
         
         self.tool_manager  = ToolManager()
-        self.tool_loader   = ToolLoader(self.tool_manager)
+        self.tool_loader   = ToolLoader(
+            self.tool_manager,
+            dependencies={"memory": self.memory}
+        )
 
         self.tool_status = self.tool_loader.load_all()
         
@@ -97,11 +100,7 @@ class Engine:
     # CONVERSATION MANAGEMENT
     # --------------------------------------------------
     
-    def _retrieve_memories(
-        self,
-        query: str = "",
-        max_memories: int = 2
-    ) -> str:
+    def _retrieve_memories(self, max_memories: int = 2) -> str:
         """Retrieve only high-priority pinned memories for baseline continuity.
         Dynamic contextual recall is handled on-demand via the search_memory tool."""
         try:
@@ -117,7 +116,7 @@ class Engine:
             sections = []
             total_chars = 0
             for item in selected:
-                snippet = f"[{item['category']}] {item['content']}"
+                snippet = f"[#{item['id']} | {item['category']}] {item['content']}"
                 if total_chars + len(snippet) > 300:
                     break
                 sections.append(snippet)
@@ -126,6 +125,16 @@ class Engine:
             return "\n".join(sections)
         except Exception:
             return ""
+
+    def _build_context(self, conversation_id: int, model_name: str):
+        memory_context = self._retrieve_memories()
+        available_tools = self.tool_manager.get_tools()
+        return self.context.build(
+            conversation_id=conversation_id,
+            model_name=model_name,
+            memory_context=memory_context,
+            tools=available_tools
+        )
 
     def create_conversation(
         self,
@@ -339,15 +348,7 @@ class Engine:
             )
 
             # Construct context
-            memory_context = self._retrieve_memories(message)
-            available_tools = self.tool_manager.get_tools()
-
-            context = self.context.build(
-                conversation_id=conversation_id,
-                model_name=model_name,
-                memory_context=memory_context,
-                tools=available_tools
-            )
+            context = self._build_context(conversation_id, model_name)
 
             # Generate response
             result = self.agent.run(
@@ -405,15 +406,7 @@ class Engine:
             self._ensure_model(model_name)
             self.conversations.add_message(conversation_id, "user", message)
 
-            memory_context = self._retrieve_memories(message)
-            available_tools = self.tool_manager.get_tools()
-
-            context = self.context.build(
-                conversation_id=conversation_id,
-                model_name=model_name,
-                memory_context=memory_context,
-                tools=available_tools
-            )
+            context = self._build_context(conversation_id, model_name)
 
             response_parts = []
             completed = False
@@ -585,36 +578,6 @@ class Engine:
                 "saved_tokens": max(0, tokens_before - tokens_after),
                 "context": metrics_after
             }
-
-    # --------------------------------------------------
-    # MEMORY
-    # --------------------------------------------------
-
-    def remember(
-        self,
-        category: str,
-        content: str,
-        importance: int = 3,
-        pinned: bool = False,
-        tags: list[str] | None = None
-    ) -> int:
-        return self.memory.add(
-            category   = category,
-            content    = content,
-            importance = importance,
-            pinned     = pinned,
-            tags       = tags
-        )
-
-    def recall(
-        self,
-        query: str,
-        category: str | None = None
-    ) -> list[dict]:
-        return self.memory.search(
-            query    = query,
-            category = category
-        )
 
     # --------------------------------------------------
     # SHUTDOWN

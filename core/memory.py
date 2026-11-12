@@ -165,20 +165,53 @@ class MemoryManager:
     # VALIDATION
     # --------------------------------------------------
 
-    def _validate_category(self, category: str):
-
-        if category not in self.CATEGORIES:
-            raise MemoryError(
-                f"Invalid memory category: {category}"
-            )
+    def _validate_category(self, category: str) -> str:
+        if not isinstance(category, str) or category not in self.CATEGORIES:
+            raise MemoryError(f"Invalid memory category: {category}")
+        return category
 
     @staticmethod
-    def _validate_content(content: str):
-
+    def _validate_content(content: str) -> str:
         if not isinstance(content, str) or not content.strip():
-            raise MemoryError(
-                "Memory content cannot be empty."
-            )
+            raise MemoryError("Memory content cannot be empty.")
+        return content.strip()
+
+    @staticmethod
+    def _validate_importance(importance: int) -> int:
+        if type(importance) is not int or not 1 <= importance <= 5:
+            raise MemoryError("Importance must be an integer between 1 and 5.")
+        return importance
+
+    @staticmethod
+    def _validate_pinned(pinned: bool) -> bool:
+        if type(pinned) is not bool:
+            raise MemoryError("pinned must be a boolean.")
+        return pinned
+
+    @staticmethod
+    def _validate_tags(tags: list[str] | None) -> list[str]:
+        if tags is None:
+            return []
+        if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+            raise MemoryError("Tags must be a list of strings.")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for tag in tags:
+            norm = tag.strip()
+            if norm and norm.lower() not in seen:
+                seen.add(norm.lower())
+                cleaned.append(norm)
+        return cleaned
+
+    @staticmethod
+    def _validate_id(memory_id: int) -> int:
+        if type(memory_id) is not int or memory_id < 1:
+            raise MemoryError(f"Invalid memory ID: {memory_id}")
+        return memory_id
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join(text.split()).lower()
 
     # --------------------------------------------------
     # CREATE
@@ -194,33 +227,17 @@ class MemoryManager:
         tags: list[str] | None = None
     ) -> int:
 
-        self._validate_category(category)
-        self._validate_content(content)
-
-        if type(importance) is not int or not 1 <= importance <= 5:
-            raise MemoryError(
-                "Importance must be an integer between 1 and 5."
-            )
-
-        if type(pinned) is not bool:
-            raise MemoryError("pinned must be a boolean.")
-
-        if tags is None:
-            tags = []
-
-        if not isinstance(tags, list) or not all(
-            isinstance(tag, str) for tag in tags
-        ):
-            raise MemoryError("Tags must be a list of strings.")
+        category = self._validate_category(category)
+        cleaned_content = self._validate_content(content)
+        importance = self._validate_importance(importance)
+        pinned = self._validate_pinned(pinned)
+        cleaned_tags = self._validate_tags(tags)
 
         now = self._timestamp()
 
         with self.lock:
-
             try:
-
                 with self.conn:
-
                     cursor = self.conn.execute("""
                         INSERT INTO memories (
                             category,
@@ -235,11 +252,11 @@ class MemoryManager:
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         category,
-                        content.strip(),
+                        cleaned_content,
                         source,
                         importance,
                         int(pinned),
-                        json.dumps(tags),
+                        json.dumps(cleaned_tags),
                         now,
                         now
                     ))
@@ -247,29 +264,41 @@ class MemoryManager:
                     return cursor.lastrowid
 
             except sqlite3.Error as exc:
-
-                raise MemoryError(
-                    f"Failed to save memory: {exc}"
-                ) from exc
+                raise MemoryError(f"Failed to save memory: {exc}") from exc
 
     # --------------------------------------------------
     # READ
     # --------------------------------------------------
 
     def get(self, memory_id: int) -> dict | None:
+        self._validate_id(memory_id)
 
         with self.lock:
-
             row = self.conn.execute("""
                 SELECT *
                 FROM memories
                 WHERE id = ?
             """, (memory_id,)).fetchone()
 
-            if row is None:
-                return None
+            return self._deserialize(row) if row is not None else None
 
-            return self._deserialize(row)
+    def find_duplicate(self, content: str, category: str | None = None) -> dict | None:
+        cleaned = self._validate_content(content)
+        target = self._normalize_text(cleaned)
+
+        sql = "SELECT * FROM memories"
+        params: list[Any] = []
+        if category is not None:
+            self._validate_category(category)
+            sql += " WHERE category = ?"
+            params.append(category)
+
+        with self.lock:
+            rows = self.conn.execute(sql, params).fetchall()
+            for row in rows:
+                if self._normalize_text(row["content"]) == target:
+                    return self._deserialize(row)
+        return None
 
     def list(
         self,
@@ -280,33 +309,20 @@ class MemoryManager:
         if limit < 1:
             raise MemoryError("Limit must be positive.")
 
+        sql = "SELECT * FROM memories"
+        params: list[Any] = []
+
+        if category is not None:
+            self._validate_category(category)
+            sql += " WHERE category = ?"
+            params.append(category)
+
+        sql += " ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ?"
+        params.append(limit)
+
         with self.lock:
-
-            if category is not None:
-
-                self._validate_category(category)
-
-                rows = self.conn.execute("""
-                    SELECT *
-                    FROM memories
-                    WHERE category = ?
-                    ORDER BY pinned DESC, importance DESC, updated_at DESC
-                    LIMIT ?
-                """, (category, limit)).fetchall()
-
-            else:
-
-                rows = self.conn.execute("""
-                    SELECT *
-                    FROM memories
-                    ORDER BY pinned DESC, importance DESC, updated_at DESC
-                    LIMIT ?
-                """, (limit,)).fetchall()
-
-            return [
-                self._deserialize(row)
-                for row in rows
-            ]
+            rows = self.conn.execute(sql, params).fetchall()
+            return [self._deserialize(row) for row in rows]
 
     # --------------------------------------------------
     # SEARCH
@@ -343,8 +359,8 @@ class MemoryManager:
         with self.lock:
             # 1. Try FTS5 ranked search
             try:
-                # Build safe FTS5 MATCH expression
-                safe_terms = [f'"{re.sub(r"[^\w\-]", "", term)}"*' for term in filtered_terms if term]
+                clean_terms = [re.sub(r"[^\w\-]", "", term) for term in filtered_terms]
+                safe_terms = [f'"{t}"*' for t in clean_terms if t]
                 if safe_terms:
                     match_expr = " OR ".join(safe_terms)
 
@@ -373,27 +389,16 @@ class MemoryManager:
                 pass
 
             # 2. Fallback to SQL LIKE search if FTS5 fails
-            conditions = []
-            params = []
+            conditions = ["content LIKE ?" for _ in filtered_terms]
+            params = [f"%{term}%" for term in filtered_terms]
 
-            for term in filtered_terms:
-                conditions.append("content LIKE ?")
-                params.append(f"%{term}%")
-
-            sql = f"""
-                SELECT *
-                FROM memories
-                WHERE ({" OR ".join(conditions)})
-            """
+            sql = f'SELECT * FROM memories WHERE ({" OR ".join(conditions)})'
 
             if category is not None:
                 sql += " AND category = ?"
                 params.append(category)
 
-            sql += """
-                ORDER BY pinned DESC, importance DESC, updated_at DESC
-                LIMIT ?
-            """
+            sql += " ORDER BY pinned DESC, importance DESC, updated_at DESC LIMIT ?"
             params.append(limit)
 
             rows = self.conn.execute(sql, params).fetchall()
@@ -413,63 +418,40 @@ class MemoryManager:
         tags: list[str] | None = None,
         source: str | None = None
     ):
+        self._validate_id(memory_id)
 
         updates = []
         params = []
 
         if content is not None:
-
-            self._validate_content(content)
-
             updates.append("content = ?")
-            params.append(content.strip())
+            params.append(self._validate_content(content))
 
         if category is not None:
-
-            self._validate_category(category)
-
             updates.append("category = ?")
-            params.append(category)
+            params.append(self._validate_category(category))
 
         if importance is not None:
-
-            if type(importance) is not int or not 1 <= importance <= 5:
-                raise MemoryError(
-                    "Importance must be an integer between 1 and 5."
-                )
-
             updates.append("importance = ?")
-            params.append(importance)
+            params.append(self._validate_importance(importance))
 
         if pinned is not None:
-
-            if type(pinned) is not bool:
-                raise MemoryError("pinned must be a boolean.")
-
             updates.append("pinned = ?")
-            params.append(int(pinned))
+            params.append(int(self._validate_pinned(pinned)))
 
         if tags is not None:
-
-            if not isinstance(tags, list) or not all(
-                isinstance(tag, str) for tag in tags
-            ):
-                raise MemoryError("Tags must be a list of strings.")
-
             updates.append("tags = ?")
-            params.append(json.dumps(tags))
+            params.append(json.dumps(self._validate_tags(tags)))
 
         if source is not None:
-
             updates.append("source = ?")
             params.append(source)
 
         if not updates:
-            return
+            raise MemoryError("At least one field must be provided to update.")
 
         updates.append("updated_at = ?")
         params.append(self._timestamp())
-
         params.append(memory_id)
 
         sql = f"""
@@ -479,35 +461,27 @@ class MemoryManager:
         """
 
         with self.lock:
-
             with self.conn:
-
                 cursor = self.conn.execute(sql, params)
-
                 if cursor.rowcount == 0:
-                    raise MemoryError(
-                        f"Memory not found: {memory_id}"
-                    )
+                    raise MemoryError(f"Memory not found: {memory_id}")
 
     # --------------------------------------------------
     # DELETE
     # --------------------------------------------------
 
     def delete(self, memory_id: int):
+        self._validate_id(memory_id)
 
         with self.lock:
-
             with self.conn:
-
                 cursor = self.conn.execute("""
                     DELETE FROM memories
                     WHERE id = ?
                 """, (memory_id,))
 
                 if cursor.rowcount == 0:
-                    raise MemoryError(
-                        f"Memory not found: {memory_id}"
-                    )
+                    raise MemoryError(f"Memory not found: {memory_id}")
 
     def clear(self, category: str | None = None):
 

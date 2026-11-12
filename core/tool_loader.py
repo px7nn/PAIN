@@ -1,7 +1,9 @@
 import importlib
+import inspect
 import pkgutil
 
 from threading import RLock
+from typing    import Any
 
 from core.tool_manager import ToolManager
 
@@ -14,8 +16,13 @@ class ToolError(Exception):
 
 
 class ToolLoader:
-    def __init__(self, tool_manager: ToolManager):
+    def __init__(
+        self,
+        tool_manager: ToolManager,
+        dependencies: dict[str, Any] | None = None
+    ):
         self.tool_manager = tool_manager
+        self._dependencies = dependencies or {}
         self._loaded = set()
         self._failed = {}
         self._lock = RLock()
@@ -63,7 +70,13 @@ class ToolLoader:
                 if not callable(register):
                     raise ToolError(f"Tool '{name}' has no register() function.")
 
-                register(self.tool_manager)
+                params = inspect.signature(register).parameters
+                kwargs = {
+                    key: value
+                    for key, value in self._dependencies.items()
+                    if key in params
+                }
+                register(self.tool_manager, **kwargs)
 
                 self._loaded.add(name)
                 self._failed.pop(name, None)
