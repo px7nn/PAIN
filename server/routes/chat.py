@@ -22,11 +22,14 @@ def get_engine_from_request(request: Request):
 def chat(payload: ChatRequest, request: Request):
     engine = get_engine_from_request(request)
 
+    attachments = [att.model_dump() for att in payload.attachments]
+
     try:
         result = engine.chat(
             message=payload.message,
             conversation_id=payload.conversation_id,
-            model=payload.model
+            model=payload.model,
+            attachments=attachments
         )
         return result
     
@@ -55,6 +58,7 @@ def stream_chat(payload: ChatRequest, request: Request):
         )
 
     model_name = payload.model or engine.current_model
+    attachments = [att.model_dump() for att in payload.attachments]
 
     def generate():
         metadata = {
@@ -69,7 +73,8 @@ def stream_chat(payload: ChatRequest, request: Request):
             for event in engine.stream(
                 message=payload.message,
                 conversation_id=conversation_id,
-                model=model_name
+                model=model_name,
+                attachments=attachments
             ):
                 yield f"data: {json.dumps(event, default=str)}\n\n"
 

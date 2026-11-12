@@ -315,11 +315,16 @@ class Engine:
 
     def chat(
         self,
-        message: str,
+        message: str = "",
         conversation_id: int | None = None,
-        model: str | None = None
+        model: str | None = None,
+        attachments: list[dict] | None = None
     ) -> dict:
-        if not isinstance(message, str) or not message.strip():
+        cleaned_attachments = [
+            att for att in (attachments or [])
+            if isinstance(att, dict)
+        ]
+        if not isinstance(message, str) or (not message.strip() and not cleaned_attachments):
             raise EngineError("Message cannot be empty.")
 
         with self.lock:
@@ -344,7 +349,8 @@ class Engine:
             self.conversations.add_message(
                 conversation_id=conversation_id,
                 role="user",
-                content=message
+                content=message,
+                attachments=cleaned_attachments or None
             )
 
             # Construct context
@@ -384,11 +390,16 @@ class Engine:
             
     def stream(
         self,
-        message: str,
+        message: str = "",
         conversation_id: int | None = None,
-        model: str | None = None
+        model: str | None = None,
+        attachments: list[dict] | None = None
     ):
-        if not isinstance(message, str) or not message.strip():
+        cleaned_attachments = [
+            att for att in (attachments or [])
+            if isinstance(att, dict)
+        ]
+        if not isinstance(message, str) or (not message.strip() and not cleaned_attachments):
             raise EngineError("Message cannot be empty.")
 
         with self.lock:
@@ -404,7 +415,12 @@ class Engine:
                 raise EngineError(f"Conversation not found: {conversation_id}")
 
             self._ensure_model(model_name)
-            self.conversations.add_message(conversation_id, "user", message)
+            self.conversations.add_message(
+                conversation_id,
+                "user",
+                message,
+                attachments=cleaned_attachments or None
+            )
 
             context = self._build_context(conversation_id, model_name)
 

@@ -8,6 +8,7 @@ from urllib.request import Request, urlopen
 
 from core.config import Config, config
 from core.conversation import ConversationManager
+from core.file_processor import format_attachment_prompt_block
 
 
 class ContextError(Exception):
@@ -134,6 +135,54 @@ class ContextManager:
         if len(self._token_cache) < 2500:
             self._token_cache[text] = count
         return count
+
+    def _format_message_for_llm(self, message: dict) -> dict:
+        content = (message.get("content") or "").strip()
+        att_block = format_attachment_prompt_block(message.get("attachments"))
+        if att_block:
+            if content:
+                combined = f"{content}\n\n{att_block}"
+            else:
+                combined = (
+                    "The user attached file(s) without extra text. "
+                    "Analyze and respond directly to the extracted content below "
+                    "(do not call read_file on these attachments):\n\n"
+                    f"{att_block}"
+                )
+        else:
+            combined = content or (message.get("content") or "")
+        return {"role": message["role"], "content": combined}
+
+    def _fit_latest_message(self, raw_msg: dict, available_tokens: int) -> tuple[dict, int]:
+        formatted = self._format_message_for_llm(raw_msg)
+        tokens = self._message_tokens(formatted)
+        attachments = raw_msg.get("attachments") or []
+        if tokens <= available_tokens or not attachments or available_tokens <= 200:
+            return formatted, tokens
+
+        user_text = (raw_msg.get("content") or "").strip()
+        user_tokens = self.estimate_tokens(user_text) + 12 if user_text else 12
+        budget_for_att_tokens = max(120, available_tokens - user_tokens)
+        max_total_att_chars = int(budget_for_att_tokens * 2.8)
+        per_att_chars = max(300, max_total_att_chars // len(attachments))
+
+        trimmed_attachments = []
+        for att in attachments:
+            if not isinstance(att, dict):
+                continue
+            copy_att = dict(att)
+            raw_text = copy_att.get("text") or ""
+            if len(raw_text) > per_att_chars:
+                copy_att["text"] = raw_text[: max(100, per_att_chars - 45)].rstrip() + "\n\n[Truncated to fit context window]"
+                copy_att["truncated"] = True
+            trimmed_attachments.append(copy_att)
+
+        trimmed_formatted = self._format_message_for_llm({
+            "role": raw_msg["role"],
+            "content": raw_msg.get("content") or "",
+            "attachments": trimmed_attachments,
+        })
+        return trimmed_formatted, self._message_tokens(trimmed_formatted)
 
     def _message_tokens(self, message: dict) -> int:
         content = message.get("content") or ""
@@ -263,11 +312,8 @@ class ContextManager:
 
         # Retrieve conversation history (excluding system messages)
         raw_history = self.conversations.get_messages(conversation_id)
-        history = [
-            {"role": m["role"], "content": m["content"]}
-            for m in raw_history
-            if m["role"] != "system"
-        ]
+        raw_non_system = [m for m in raw_history if m.get("role") != "system"]
+        history = [self._format_message_for_llm(m) for m in raw_non_system]
 
         # --- Allocate Budget for Verbatim Turns vs Rolling Summary ---
         
@@ -297,30 +343,33 @@ class ContextManager:
         if compaction_boundary_idx != -1:
             # Everything before the compaction landmark was folded into the summary
             omitted_messages = [
-                {"role": m["role"], "content": m["content"]}
+                self._format_message_for_llm(m)
                 for m in raw_history[:compaction_boundary_idx]
                 if m.get("role") != "system"
             ]
-            history_pool = [
-                {"role": m["role"], "content": m["content"]}
-                for m in raw_history[compaction_boundary_idx + 1:]
+            raw_pool = [
+                m for m in raw_history[compaction_boundary_idx + 1:]
                 if m.get("role") != "system"
             ]
+            history_pool = [self._format_message_for_llm(m) for m in raw_pool]
         elif stored_summary and len(history) > 2:
             preserved_count = 2 if len(history) <= 4 else 4
             omitted_messages = history[:-preserved_count]
+            raw_pool = raw_non_system[-preserved_count:]
             history_pool = history[-preserved_count:]
         else:
+            raw_pool = raw_non_system
             history_pool = history
 
-        for idx, message in enumerate(reversed(history_pool)):
-            msg_tokens = self._message_tokens(message)
-
-            # Always preserve at least the latest user message
+        for idx, (raw_msg, message) in enumerate(zip(reversed(raw_pool), reversed(history_pool))):
+            # Always preserve at least the latest user message (trim oversized attachments if needed)
             if not selected_recent:
-                selected_recent.append(message)
+                fitted_msg, msg_tokens = self._fit_latest_message(raw_msg, max(400, available_for_history))
+                selected_recent.append(fitted_msg)
                 used_history_tokens += msg_tokens
                 continue
+
+            msg_tokens = self._message_tokens(message)
 
             # Keep adding recent turns if within history budget
             if used_history_tokens + msg_tokens <= available_for_history:
@@ -458,7 +507,7 @@ class ContextManager:
             omitted = 0
 
         history_tokens = sum(
-            self._message_tokens({"role": m["role"], "content": m["content"]})
+            self._message_tokens(self._format_message_for_llm(m))
             for m in active_history
         )
 

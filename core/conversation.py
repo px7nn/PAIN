@@ -1,5 +1,6 @@
 # This script is AI-written, has not been verified, and is therefore flagged for verification.
 
+import json
 import sqlite3
 import threading
 
@@ -71,6 +72,7 @@ class ConversationManager:
 
                     role            TEXT NOT NULL,
                     content         TEXT NOT NULL,
+                    attachments     TEXT,
 
                     model           TEXT,
                     created_at      TEXT NOT NULL,
@@ -93,6 +95,11 @@ class ConversationManager:
             cols = [row[1] for row in self.conn.execute("PRAGMA table_info(conversations)").fetchall()]
             if "summary" not in cols:
                 self.conn.execute("ALTER TABLE conversations ADD COLUMN summary TEXT")
+
+            # Ensure attachments column exists in existing databases
+            msg_cols = [row[1] for row in self.conn.execute("PRAGMA table_info(messages)").fetchall()]
+            if "attachments" not in msg_cols:
+                self.conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
 
             self.conn.commit()
 
@@ -221,7 +228,8 @@ class ConversationManager:
         conversation_id: int,
         role: str,
         content: str,
-        model: str | None = None
+        model: str | None = None,
+        attachments: list[dict] | None = None
     ) -> int:
 
         if role not in ("system", "user", "assistant"):
@@ -229,10 +237,21 @@ class ConversationManager:
                 f"Invalid message role: {role}"
             )
 
-        if not isinstance(content, str) or not content.strip():
+        cleaned_attachments = [
+            att for att in (attachments or [])
+            if isinstance(att, dict)
+        ]
+
+        if not isinstance(content, str) or (not content.strip() and not cleaned_attachments):
             raise ConversationError(
                 "Message content cannot be empty."
             )
+
+        attachments_json = (
+            json.dumps(cleaned_attachments, ensure_ascii=False)
+            if cleaned_attachments
+            else None
+        )
 
         now = self._timestamp()
 
@@ -258,14 +277,16 @@ class ConversationManager:
                             conversation_id,
                             role,
                             content,
+                            attachments,
                             model,
                             created_at
                         )
-                        VALUES (?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     """, (
                         conversation_id,
                         role,
                         content,
+                        attachments_json,
                         model,
                         now
                     ))
@@ -276,7 +297,11 @@ class ConversationManager:
                         and conversation["title"] == "New conversation"
                     ):
 
-                        title = " ".join(content.split())[:60]
+                        if content.strip():
+                            title = " ".join(content.split())[:60]
+                        else:
+                            first_name = cleaned_attachments[0].get("filename", "attachment")
+                            title = f"File: {first_name}"[:60]
 
                         self.conn.execute("""
                             UPDATE conversations
@@ -332,7 +357,21 @@ class ConversationManager:
                     ORDER BY id ASC
                 """, (conversation_id,)).fetchall()
 
-            return [dict(row) for row in rows]
+            messages = []
+            for row in rows:
+                item = dict(row)
+                raw_att = item.get("attachments")
+                if raw_att:
+                    try:
+                        parsed = json.loads(raw_att)
+                        item["attachments"] = parsed if isinstance(parsed, list) else []
+                    except json.JSONDecodeError:
+                        item["attachments"] = []
+                else:
+                    item["attachments"] = []
+                messages.append(item)
+
+            return messages
 
     def get_message_count(self, conversation_id: int) -> int:
 

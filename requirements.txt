@@ -1,8 +1,22 @@
 # API
 fastapi
 uvicorn[standard]
+python-multipart
 
 # System monitoring
 psutil
 
+# Web search
 ddgs
+
+# Document parsing & OCR pipeline
+pypdf
+python-docx
+openpyxl
+python-pptx
+striprtf
+xlrd
+olefile
+lxml
+pillow
+rapidocr-onnxruntime
