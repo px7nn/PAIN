@@ -774,12 +774,20 @@ function showPage(page) {
         pageElement.classList.add("active");
     }
 
+    const pageTitles = {
+        chat: "Chat",
+        system: "System",
+        database: "Database & Memory",
+        settings: "Settings"
+    };
     $("page-title").textContent =
-        page.charAt(0).toUpperCase() + page.slice(1);
+        pageTitles[page] || (page.charAt(0).toUpperCase() + page.slice(1));
 
     if (page === "system") {
         refreshSystem();
         systemTimer = setInterval(refreshSystem, 2000);
+    } else if (page === "database") {
+        refreshDatabaseExplorer();
     } else if (page === "settings") {
         refreshSettings();
     }
@@ -2586,6 +2594,636 @@ $("clear-all-conversations")?.addEventListener("click", async () => {
     } catch (err) {
         alert(`Failed to delete conversations: ${err.message}`);
     }
+});
+
+
+// --------------------------------------------------
+// DATABASE, MODEL MEMORY & RUNTIME EXPLORER
+// --------------------------------------------------
+
+const dbState = {
+    activeTab: "memories",
+    overview: null,
+    memCategory: "",
+    memQuery: "",
+    editingMemoryId: null,
+    selectedTable: "memories",
+    showInternalTables: false,
+    tableLimit: 25,
+    tableOffset: 0,
+    tableQuery: "",
+    tableData: null,
+    selectedRowIdx: null,
+    memSearchTimer: null,
+    tableSearchTimer: null
+};
+
+function formatDbTimestamp(isoStr) {
+    if (!isoStr) return "—";
+    const dt = new Date(isoStr);
+    if (isNaN(dt.getTime())) return String(isoStr);
+    return dt.toLocaleString();
+}
+
+function setDbTab(tabName) {
+    dbState.activeTab = tabName;
+    document.querySelectorAll(".db-tab-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.dbTab === tabName);
+    });
+    document.querySelectorAll(".db-tab-panel").forEach((panel) => {
+        panel.classList.toggle("active", panel.id === `db-panel-${tabName}`);
+    });
+
+    if (tabName === "tables" && !dbState.tableData) {
+        loadTableData();
+    }
+}
+
+async function refreshDatabaseExplorer() {
+    try {
+        const overview = await api("/database/overview");
+        dbState.overview = overview;
+        renderDatabaseOverview(overview);
+        renderRuntimeContext(overview);
+        renderTableTabs(overview.tables || []);
+        await loadMemories();
+        if (dbState.activeTab === "tables") {
+            await loadTableData();
+        }
+    } catch (err) {
+        console.warn("Failed to refresh database explorer:", err);
+    }
+}
+
+function renderDatabaseOverview(overview) {
+    const db = overview.database || {};
+    const mem = overview.memories || {};
+    const rt = overview.runtime || {};
+
+    const pathEl = $("db-path-pill");
+    if (pathEl) {
+        pathEl.textContent = db.path || "pain.db";
+        pathEl.title = db.path || "";
+    }
+
+    $("db-kpi-size").textContent = formatBytes(db.total_bytes || 0);
+    $("db-kpi-tables").textContent =
+        `${db.table_count ?? 0} tables · DB ${formatBytes(db.db_bytes || 0)} + WAL ${formatBytes(db.wal_bytes || 0)}`;
+
+    $("db-kpi-memories").textContent = String(mem.total ?? 0);
+    $("db-kpi-memories-meta").textContent =
+        `${mem.pinned ?? 0} pinned · ${mem.auto_injected ?? 0} auto-injected`;
+
+    $("db-kpi-messages").textContent = String(db.messages_count ?? 0);
+    $("db-kpi-conversations").textContent = `${db.conversations_count ?? 0} conversations`;
+
+    const toolCount = Array.isArray(rt.loaded_tools) ? rt.loaded_tools.length : 0;
+    $("db-kpi-tools").textContent = String(toolCount);
+    $("db-kpi-model").textContent =
+        `Model: ${rt.active_model || "None"} (${rt.inference_running ? "running" : "idle"})`;
+
+    renderMemoryCategoryFilters(mem.categories || [], mem.by_category || {}, mem.total || 0);
+}
+
+function renderMemoryCategoryFilters(categories, byCategory, total) {
+    const container = $("mem-category-filters");
+    if (!container) return;
+    container.replaceChildren();
+
+    const makePill = (cat, label) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `db-filter-pill${dbState.memCategory === cat ? " active" : ""}`;
+        btn.dataset.category = cat;
+        btn.textContent = label;
+        btn.addEventListener("click", () => {
+            dbState.memCategory = cat;
+            renderMemoryCategoryFilters(categories, byCategory, total);
+            loadMemories();
+        });
+        return btn;
+    };
+
+    container.appendChild(makePill("", `All (${total})`));
+    categories.forEach((cat) => {
+        const cnt = byCategory[cat] ?? 0;
+        container.appendChild(makePill(cat, `${cat} (${cnt})`));
+    });
+}
+
+async function loadMemories() {
+    const listEl = $("mem-list");
+    if (!listEl) return;
+
+    const params = new URLSearchParams();
+    if (dbState.memCategory) params.set("category", dbState.memCategory);
+    if (dbState.memQuery.trim()) params.set("q", dbState.memQuery.trim());
+
+    try {
+        const qs = params.toString();
+        const data = await api(`/database/memories${qs ? `?${qs}` : ""}`);
+        renderMemoriesList(data.memories || []);
+    } catch (err) {
+        listEl.innerHTML = `<div class="db-empty-state">Failed to load memories: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function openMemoryForm(existing = null) {
+    const card = $("mem-form-card");
+    if (!card) return;
+
+    dbState.editingMemoryId = existing ? existing.id : null;
+    $("mem-form-title").textContent = existing ? `Edit Memory #${existing.id}` : "Add Model Memory";
+    $("mem-form-submit").textContent = existing ? "Update Memory" : "Save Memory";
+    $("mem-input-category").value = existing?.category || "fact";
+    $("mem-input-importance").value = String(existing?.importance || 3);
+    $("mem-input-pinned").checked = Boolean(existing?.pinned);
+    $("mem-input-tags").value = Array.isArray(existing?.tags) ? existing.tags.join(", ") : "";
+    $("mem-input-content").value = existing?.content || "";
+
+    card.style.display = "flex";
+    $("mem-input-content").focus();
+}
+
+function closeMemoryForm() {
+    const card = $("mem-form-card");
+    if (!card) return;
+    card.style.display = "none";
+    dbState.editingMemoryId = null;
+}
+
+function renderMemoriesList(memories) {
+    const listEl = $("mem-list");
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    if (!Array.isArray(memories) || memories.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "db-empty-state";
+        empty.textContent = dbState.memQuery || dbState.memCategory
+            ? "No memories match the active filter."
+            : "No memories stored yet. Ask PAIN to remember something in chat, or click '+ Add Memory'.";
+        listEl.appendChild(empty);
+        return;
+    }
+
+    memories.forEach((mem) => {
+        const card = document.createElement("article");
+        card.className = "mem-card";
+
+        const isAutoCtx = Boolean(mem.pinned) && Number(mem.importance) >= 4;
+        const header = document.createElement("div");
+        header.className = "mem-card-header";
+
+        const badges = document.createElement("div");
+        badges.className = "mem-card-badges";
+        badges.innerHTML = `
+            <span class="mem-badge">#${escapeHtml(String(mem.id))}</span>
+            <span class="mem-badge">${escapeHtml(mem.category || "fact")}</span>
+            <span class="mem-badge">Importance ${escapeHtml(String(mem.importance))}/5</span>
+            ${mem.pinned ? `<span class="mem-badge pinned">Pinned</span>` : ""}
+            ${isAutoCtx ? `<span class="mem-badge auto-ctx">Auto-Context</span>` : ""}
+        `;
+
+        const actions = document.createElement("div");
+        actions.className = "mem-card-actions";
+
+        const pinBtn = document.createElement("button");
+        pinBtn.type = "button";
+        pinBtn.className = "db-ghost-btn";
+        pinBtn.textContent = mem.pinned ? "Unpin" : "Pin";
+        pinBtn.addEventListener("click", async () => {
+            try {
+                await api(`/database/memories/${mem.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ pinned: !mem.pinned })
+                });
+                await refreshDatabaseExplorer();
+            } catch (err) {
+                alert(`Failed to update memory: ${err.message}`);
+            }
+        });
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "db-ghost-btn";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("click", () => openMemoryForm(mem));
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "db-danger-outline-btn";
+        delBtn.textContent = "Delete";
+        delBtn.addEventListener("click", async () => {
+            if (!confirm(`Delete memory #${mem.id}?`)) return;
+            try {
+                await api(`/database/memories/${mem.id}`, { method: "DELETE" });
+                await refreshDatabaseExplorer();
+            } catch (err) {
+                alert(`Failed to delete memory: ${err.message}`);
+            }
+        });
+
+        actions.append(pinBtn, editBtn, delBtn);
+        header.append(badges, actions);
+
+        const body = document.createElement("div");
+        body.className = "mem-card-content";
+        body.textContent = mem.content || "";
+
+        const footer = document.createElement("div");
+        footer.className = "mem-card-footer";
+
+        const tagsWrap = document.createElement("div");
+        tagsWrap.className = "mem-tags";
+        if (Array.isArray(mem.tags) && mem.tags.length > 0) {
+            mem.tags.forEach((tag) => {
+                const pill = document.createElement("span");
+                pill.className = "mem-tag-pill";
+                pill.textContent = tag;
+                tagsWrap.appendChild(pill);
+            });
+        } else {
+            const noTag = document.createElement("span");
+            noTag.textContent = "No tags";
+            tagsWrap.appendChild(noTag);
+        }
+
+        const metaSpan = document.createElement("span");
+        metaSpan.textContent = `Source: ${mem.source || "unknown"} · Updated: ${formatDbTimestamp(mem.updated_at)}`;
+
+        footer.append(tagsWrap, metaSpan);
+        card.append(header, body, footer);
+        listEl.appendChild(card);
+    });
+}
+
+function renderTableTabs(tables) {
+    const container = $("db-table-tabs");
+    if (!container) return;
+    container.replaceChildren();
+
+    const visible = tables.filter((t) => dbState.showInternalTables || !t.internal);
+    if (visible.length > 0 && !visible.some((t) => t.name === dbState.selectedTable)) {
+        dbState.selectedTable = visible[0].name;
+    }
+
+    visible.forEach((t) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `db-table-pill${dbState.selectedTable === t.name ? " active" : ""}`;
+        btn.innerHTML = `
+            <span>${escapeHtml(t.name)}</span>
+            <span class="db-table-count-pill">${t.row_count !== null ? escapeHtml(String(t.row_count)) : "?"}</span>
+        `;
+        btn.addEventListener("click", () => {
+            dbState.selectedTable = t.name;
+            dbState.tableOffset = 0;
+            dbState.selectedRowIdx = null;
+            $("db-row-detail").style.display = "none";
+            renderTableTabs(tables);
+            loadTableData();
+        });
+        container.appendChild(btn);
+    });
+}
+
+async function loadTableData() {
+    const wrap = $("db-table-wrap");
+    const schemaStrip = $("db-schema-strip");
+    if (!wrap || !dbState.selectedTable) return;
+
+    const params = new URLSearchParams({
+        limit: String(dbState.tableLimit),
+        offset: String(dbState.tableOffset)
+    });
+    if (dbState.tableQuery.trim()) {
+        params.set("q", dbState.tableQuery.trim());
+    }
+
+    try {
+        const data = await api(`/database/tables/${encodeURIComponent(dbState.selectedTable)}?${params.toString()}`);
+        dbState.tableData = data;
+
+        if (schemaStrip) {
+            schemaStrip.replaceChildren();
+            (data.schema || []).forEach((col) => {
+                const chip = document.createElement("span");
+                chip.className = "db-col-chip";
+                chip.innerHTML = `${escapeHtml(col.name)}<span class="db-col-type">${escapeHtml(col.type)}</span>${col.pk ? `<span class="db-col-pk">PK</span>` : ""}`;
+                schemaStrip.appendChild(chip);
+            });
+        }
+
+        const total = data.filtered_rows ?? 0;
+        const start = total === 0 ? 0 : data.offset + 1;
+        const end = Math.min(total, data.offset + (data.rows || []).length);
+        $("db-table-count-label").textContent =
+            dbState.tableQuery.trim()
+                ? `${start}–${end} of ${total} matches (${data.total_rows} total)`
+                : `${start}–${end} of ${total} rows`;
+
+        const currentPage = Math.floor(data.offset / data.limit) + 1;
+        const totalPages = Math.max(1, Math.ceil(total / data.limit));
+        $("db-page-indicator").textContent = `Page ${currentPage} / ${totalPages}`;
+        $("db-page-prev").disabled = data.offset <= 0;
+        $("db-page-next").disabled = data.offset + data.limit >= total;
+
+        renderTableRows(data);
+    } catch (err) {
+        wrap.innerHTML = `<div class="db-empty-state">Failed to inspect table: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function renderTableRows(data) {
+    const wrap = $("db-table-wrap");
+    if (!wrap) return;
+    wrap.replaceChildren();
+
+    const cols = (data.schema || []).map((c) => c.name);
+    const rows = data.rows || [];
+
+    if (rows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "db-empty-state";
+        empty.textContent = dbState.tableQuery.trim()
+            ? `No rows in "${data.table}" match "${dbState.tableQuery.trim()}".`
+            : `Table "${data.table}" is currently empty.`;
+        wrap.appendChild(empty);
+        return;
+    }
+
+    const colKeys = cols.length > 0 ? cols : Object.keys(rows[0]);
+    const table = document.createElement("table");
+    table.className = "db-data-table";
+
+    const thead = document.createElement("thead");
+    const headRow = document.createElement("tr");
+    colKeys.forEach((col) => {
+        const th = document.createElement("th");
+        th.textContent = col;
+        headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+
+    const tbody = document.createElement("tbody");
+    rows.forEach((row, idx) => {
+        const tr = document.createElement("tr");
+        if (dbState.selectedRowIdx === idx) tr.classList.add("selected");
+
+        colKeys.forEach((col) => {
+            const td = document.createElement("td");
+            const val = row[col];
+            if (val === null || val === undefined) {
+                td.innerHTML = `<span class="db-null-val">NULL</span>`;
+            } else {
+                const strVal = typeof val === "string" ? val : JSON.stringify(val);
+                td.textContent = strVal.length > 140 ? `${strVal.slice(0, 140)}…` : strVal;
+                td.title = strVal.slice(0, 500);
+            }
+            tr.appendChild(td);
+        });
+
+        tr.addEventListener("click", () => {
+            dbState.selectedRowIdx = idx;
+            tbody.querySelectorAll("tr").forEach((r) => r.classList.remove("selected"));
+            tr.classList.add("selected");
+            showRowDetail(data.table, colKeys, row);
+        });
+        tbody.appendChild(tr);
+    });
+
+    table.append(thead, tbody);
+    wrap.appendChild(table);
+}
+
+function showRowDetail(tableName, colKeys, row) {
+    const panel = $("db-row-detail");
+    const title = $("db-row-detail-title");
+    const body = $("db-row-detail-body");
+    if (!panel || !title || !body) return;
+
+    const idPart = row.id !== undefined ? ` #${row.id}` : "";
+    title.textContent = `${tableName}${idPart} · Row Inspector`;
+    body.replaceChildren();
+
+    colKeys.forEach((col) => {
+        const field = document.createElement("div");
+        field.className = "db-detail-field";
+
+        const keyEl = document.createElement("div");
+        keyEl.className = "db-detail-key";
+        keyEl.textContent = col;
+
+        const valEl = document.createElement("pre");
+        valEl.className = "db-detail-val";
+
+        const rawVal = row[col];
+        if (rawVal === null || rawVal === undefined) {
+            valEl.textContent = "NULL";
+        } else if (typeof rawVal === "string") {
+            let formatted = rawVal;
+            if ((rawVal.startsWith("{") || rawVal.startsWith("[")) && rawVal.length < 100000) {
+                try {
+                    formatted = JSON.stringify(JSON.parse(rawVal), null, 2);
+                } catch {}
+            }
+            valEl.textContent = formatted;
+        } else {
+            valEl.textContent = JSON.stringify(rawVal, null, 2);
+        }
+
+        field.append(keyEl, valEl);
+        body.appendChild(field);
+    });
+
+    panel.style.display = "flex";
+}
+
+function renderRuntimeContext(overview) {
+    const rt = overview.runtime || {};
+    const tools = rt.loaded_tools || [];
+    const failed = rt.failed_tools || {};
+
+    $("db-tools-badge").textContent = `${tools.length} LOADED`;
+    const toolsEl = $("db-tools-list");
+    if (toolsEl) {
+        toolsEl.replaceChildren();
+        if (tools.length === 0) {
+            toolsEl.innerHTML = `<div class="db-empty-state">No tools registered.</div>`;
+        } else {
+            tools.forEach((t) => {
+                const item = document.createElement("div");
+                item.className = "db-runtime-item";
+                const paramsStr = Array.isArray(t.parameters) && t.parameters.length > 0
+                    ? `(${t.parameters.join(", ")})`
+                    : "()";
+                item.innerHTML = `
+                    <div class="db-runtime-item-top">
+                        <strong>${escapeHtml(t.name)}</strong>
+                        <span class="db-meta-label">${escapeHtml(paramsStr)}</span>
+                    </div>
+                    <div class="db-runtime-item-desc">${escapeHtml(t.description || "")}</div>
+                `;
+                toolsEl.appendChild(item);
+            });
+        }
+        const failedNames = Object.keys(failed);
+        if (failedNames.length > 0) {
+            const errBox = document.createElement("div");
+            errBox.className = "db-runtime-item";
+            errBox.style.borderColor = "rgba(215, 123, 123, 0.35)";
+            errBox.innerHTML = `
+                <div class="db-runtime-item-top">
+                    <strong style="color: var(--red);">Failed Tools</strong>
+                </div>
+                <div class="db-runtime-item-desc">${escapeHtml(failedNames.join(", "))}</div>
+            `;
+            toolsEl.appendChild(errBox);
+        }
+    }
+
+    const modelsListEl = $("db-models-list");
+    $("db-models-badge").textContent = `${availableModels.length} MODELS`;
+    if (modelsListEl) {
+        modelsListEl.replaceChildren();
+        if (!availableModels.length) {
+            modelsListEl.innerHTML = `<div class="db-empty-state">No local models configured.</div>`;
+        } else {
+            availableModels.forEach((m) => {
+                const item = document.createElement("div");
+                item.className = "db-runtime-item";
+                const isActive = m.name === rt.active_model;
+                const ctxK = m.context_size ? `${Math.round(m.context_size / 1024)}k ctx` : "";
+                const size = formatModelSize(m.size_bytes);
+                item.innerHTML = `
+                    <div class="db-runtime-item-top">
+                        <strong>${escapeHtml(m.name)}</strong>
+                        <span class="mem-badge ${isActive ? "auto-ctx" : ""}">${isActive ? "ACTIVE" : escapeHtml(m.quantization || "GGUF")}</span>
+                    </div>
+                    <div class="db-runtime-item-desc">${escapeHtml([m.role, size, ctxK, m.available === false ? "Missing GGUF" : "Ready"].filter(Boolean).join(" · "))}</div>
+                `;
+                modelsListEl.appendChild(item);
+            });
+        }
+    }
+
+    $("db-personality-model").textContent = rt.active_model || "Default";
+    $("db-personality-preview").textContent = rt.personality_preview || "[Personality prompt unavailable]";
+}
+
+// Wire Database & Memory Explorer events
+document.querySelectorAll(".db-tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => setDbTab(btn.dataset.dbTab));
+});
+
+$("db-refresh-btn")?.addEventListener("click", () => refreshDatabaseExplorer());
+
+$("mem-add-toggle")?.addEventListener("click", () => openMemoryForm(null));
+$("mem-form-cancel")?.addEventListener("click", () => closeMemoryForm());
+
+$("mem-form-card")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const content = $("mem-input-content").value.trim();
+    if (!content) return;
+
+    const tagsRaw = $("mem-input-tags").value
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
+
+    const payload = {
+        category: $("mem-input-category").value,
+        importance: Number($("mem-input-importance").value),
+        pinned: $("mem-input-pinned").checked,
+        tags: tagsRaw,
+        content
+    };
+
+    try {
+        if (dbState.editingMemoryId !== null) {
+            await api(`/database/memories/${dbState.editingMemoryId}`, {
+                method: "PATCH",
+                body: JSON.stringify(payload)
+            });
+        } else {
+            await api("/database/memories", {
+                method: "POST",
+                body: JSON.stringify(payload)
+            });
+        }
+        closeMemoryForm();
+        await refreshDatabaseExplorer();
+    } catch (err) {
+        alert(`Failed to save memory: ${err.message}`);
+    }
+});
+
+$("mem-clear-unpinned")?.addEventListener("click", async () => {
+    const scope = dbState.memCategory ? ` in "${dbState.memCategory}"` : "";
+    if (!confirm(`Clear all unpinned memories${scope}? Pinned memories will be preserved.`)) {
+        return;
+    }
+    try {
+        const qs = dbState.memCategory ? `?category=${encodeURIComponent(dbState.memCategory)}` : "";
+        await api(`/database/memories${qs}`, { method: "DELETE" });
+        await refreshDatabaseExplorer();
+    } catch (err) {
+        alert(`Failed to clear memories: ${err.message}`);
+    }
+});
+
+$("mem-search-input")?.addEventListener("input", (e) => {
+    dbState.memQuery = e.target.value;
+    clearTimeout(dbState.memSearchTimer);
+    dbState.memSearchTimer = setTimeout(() => loadMemories(), 180);
+});
+
+$("db-show-internal-tables")?.addEventListener("change", (e) => {
+    dbState.showInternalTables = e.target.checked;
+    if (dbState.overview) {
+        renderTableTabs(dbState.overview.tables || []);
+        loadTableData();
+    }
+});
+
+$("db-table-search")?.addEventListener("input", (e) => {
+    dbState.tableQuery = e.target.value;
+    dbState.tableOffset = 0;
+    dbState.selectedRowIdx = null;
+    $("db-row-detail").style.display = "none";
+    clearTimeout(dbState.tableSearchTimer);
+    dbState.tableSearchTimer = setTimeout(() => loadTableData(), 220);
+});
+
+$("db-page-prev")?.addEventListener("click", () => {
+    dbState.tableOffset = Math.max(0, dbState.tableOffset - dbState.tableLimit);
+    dbState.selectedRowIdx = null;
+    $("db-row-detail").style.display = "none";
+    loadTableData();
+});
+
+$("db-page-next")?.addEventListener("click", () => {
+    dbState.tableOffset += dbState.tableLimit;
+    dbState.selectedRowIdx = null;
+    $("db-row-detail").style.display = "none";
+    loadTableData();
+});
+
+$("db-row-detail-close")?.addEventListener("click", () => {
+    $("db-row-detail").style.display = "none";
+    dbState.selectedRowIdx = null;
+    document.querySelectorAll(".db-data-table tbody tr.selected").forEach((tr) => tr.classList.remove("selected"));
+});
+
+$("db-copy-personality")?.addEventListener("click", async () => {
+    const text = $("db-personality-preview")?.textContent || "";
+    try {
+        await navigator.clipboard.writeText(text);
+        const btn = $("db-copy-personality");
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = "Copy"; }, 1200);
+    } catch {}
 });
 
 

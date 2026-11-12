@@ -10,6 +10,7 @@ from core.engine import Engine
 from server.routes import (
     chat,
     conversations,
+    database,
     files,
     models,
     system
@@ -43,6 +44,7 @@ app = FastAPI(
 
 app.include_router(chat.router)
 app.include_router(conversations.router)
+app.include_router(database.router)
 app.include_router(files.router)
 app.include_router(models.router)
 app.include_router(system.router)

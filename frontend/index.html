@@ -47,6 +47,11 @@
                 <span>System</span>
             </button>
 
+            <button class="nav-item" data-page="database" type="button">
+                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path></svg>
+                <span>Database</span>
+            </button>
+
             <button class="nav-item" data-page="settings" type="button">
                 <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 <span>Settings</span>
@@ -465,6 +470,207 @@
             <div class="system-note">
                 Metrics refresh every 2 seconds. GPU telemetry depends
                 on operating-system driver support.
+            </div>
+
+        </section>
+
+
+        <!-- DATABASE & MEMORY PAGE -->
+
+        <section id="database-page" class="page system-page database-page">
+
+            <div class="system-heading">
+                <div>
+                    <h1>Database &amp; Memory</h1>
+                    <p>Inspect SQLite tables, persistent model memory, mounted tools &amp; prompt state</p>
+                </div>
+
+                <div class="db-header-actions">
+                    <span class="db-path-pill" id="db-path-pill">pain.db</span>
+                    <button id="db-refresh-btn" class="db-action-btn" type="button" title="Refresh database and memory view">
+                        <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+                        <span>Refresh</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="db-kpi-grid">
+                <article class="metric-card db-kpi-card">
+                    <div class="metric-header">
+                        <span>SQLite Storage</span>
+                        <span class="metric-unit">PAIN.DB</span>
+                    </div>
+                    <div class="metric-value db-kpi-value" id="db-kpi-size">--</div>
+                    <div class="metric-details" id="db-kpi-tables">-- tables</div>
+                </article>
+
+                <article class="metric-card db-kpi-card">
+                    <div class="metric-header">
+                        <span>Model Memory</span>
+                        <span class="metric-unit">PERSISTENT</span>
+                    </div>
+                    <div class="metric-value db-kpi-value" id="db-kpi-memories">--</div>
+                    <div class="metric-details" id="db-kpi-memories-meta">-- pinned · -- auto-context</div>
+                </article>
+
+                <article class="metric-card db-kpi-card">
+                    <div class="metric-header">
+                        <span>Chat History</span>
+                        <span class="metric-unit">RECORDS</span>
+                    </div>
+                    <div class="metric-value db-kpi-value" id="db-kpi-messages">--</div>
+                    <div class="metric-details" id="db-kpi-conversations">-- conversations</div>
+                </article>
+
+                <article class="metric-card db-kpi-card">
+                    <div class="metric-header">
+                        <span>Runtime Tools</span>
+                        <span class="metric-unit">MOUNTED</span>
+                    </div>
+                    <div class="metric-value db-kpi-value" id="db-kpi-tools">--</div>
+                    <div class="metric-details" id="db-kpi-model">Model: --</div>
+                </article>
+            </div>
+
+            <div class="db-tab-bar" role="tablist">
+                <button class="db-tab-btn active" data-db-tab="memories" type="button">Model Memory</button>
+                <button class="db-tab-btn" data-db-tab="tables" type="button">SQLite Tables</button>
+                <button class="db-tab-btn" data-db-tab="runtime" type="button">Tools &amp; Context</button>
+            </div>
+
+            <!-- TAB 1: MODEL MEMORY -->
+            <div id="db-panel-memories" class="db-tab-panel active">
+                <div class="db-toolbar">
+                    <div class="db-toolbar-left">
+                        <input id="mem-search-input" class="db-search-input" type="search" placeholder="Search memories by content, tag, or #id...">
+                        <div class="db-filter-pills" id="mem-category-filters">
+                            <button class="db-filter-pill active" data-category="" type="button">All</button>
+                        </div>
+                    </div>
+                    <div class="db-toolbar-right">
+                        <button id="mem-add-toggle" class="db-primary-btn" type="button">+ Add Memory</button>
+                        <button id="mem-clear-unpinned" class="db-danger-outline-btn" type="button" title="Delete all unpinned memories">Clear Unpinned</button>
+                    </div>
+                </div>
+
+                <form id="mem-form-card" class="metric-card mem-form-card" style="display: none;">
+                    <div class="mem-form-header">
+                        <span id="mem-form-title">Add Model Memory</span>
+                        <button id="mem-form-cancel" class="db-ghost-btn" type="button">Cancel</button>
+                    </div>
+                    <div class="mem-form-grid">
+                        <label class="mem-field">
+                            <span>Category</span>
+                            <select id="mem-input-category">
+                                <option value="fact">fact</option>
+                                <option value="project">project</option>
+                                <option value="preference">preference</option>
+                                <option value="environment">environment</option>
+                                <option value="decision">decision</option>
+                                <option value="task">task</option>
+                            </select>
+                        </label>
+                        <label class="mem-field">
+                            <span>Importance (1-5)</span>
+                            <select id="mem-input-importance">
+                                <option value="5">5 · Critical</option>
+                                <option value="4">4 · High</option>
+                                <option value="3" selected>3 · Normal</option>
+                                <option value="2">2 · Low</option>
+                                <option value="1">1 · Note</option>
+                            </select>
+                        </label>
+                        <label class="mem-field">
+                            <span>Tags (comma-separated)</span>
+                            <input id="mem-input-tags" type="text" placeholder="e.g. hardware, style, pain">
+                        </label>
+                        <label class="mem-checkbox-field">
+                            <input id="mem-input-pinned" type="checkbox">
+                            <span>Pinned (auto-injected into prompt when importance ≥ 4)</span>
+                        </label>
+                    </div>
+                    <label class="mem-field" style="margin-top: 10px;">
+                        <span>Memory Content</span>
+                        <textarea id="mem-input-content" rows="3" placeholder="Fact, preference, project detail, or instruction for PAIN to remember..." required></textarea>
+                    </label>
+                    <div class="mem-form-footer">
+                        <span class="mem-form-hint">Pinned memories with importance ≥ 4 are included automatically in baseline context; all memories are searchable via search_memory.</span>
+                        <button id="mem-form-submit" class="db-primary-btn" type="submit">Save Memory</button>
+                    </div>
+                </form>
+
+                <div id="mem-list" class="mem-list">
+                    <div class="db-empty-state">Loading memories...</div>
+                </div>
+            </div>
+
+            <!-- TAB 2: SQLITE TABLES -->
+            <div id="db-panel-tables" class="db-tab-panel">
+                <div class="db-tables-top">
+                    <div id="db-table-tabs" class="db-table-tabs"></div>
+                    <label class="db-internal-toggle">
+                        <input id="db-show-internal-tables" type="checkbox">
+                        <span>Show FTS &amp; internal tables</span>
+                    </label>
+                </div>
+
+                <div class="db-toolbar">
+                    <div class="db-toolbar-left">
+                        <input id="db-table-search" class="db-search-input" type="search" placeholder="Filter rows in selected table...">
+                        <span id="db-table-count-label" class="db-meta-label">0 rows</span>
+                    </div>
+                    <div class="db-toolbar-right">
+                        <button id="db-page-prev" class="db-action-btn" type="button" disabled>← Prev</button>
+                        <span id="db-page-indicator" class="db-meta-label">Page 1</span>
+                        <button id="db-page-next" class="db-action-btn" type="button" disabled>Next →</button>
+                    </div>
+                </div>
+
+                <div id="db-schema-strip" class="db-schema-strip"></div>
+
+                <div id="db-table-wrap" class="db-table-wrap">
+                    <div class="db-empty-state">Select a table to inspect its rows.</div>
+                </div>
+
+                <div id="db-row-detail" class="metric-card db-row-detail" style="display: none;">
+                    <div class="mem-form-header">
+                        <span id="db-row-detail-title">Row Details</span>
+                        <button id="db-row-detail-close" class="db-ghost-btn" type="button">Close</button>
+                    </div>
+                    <div id="db-row-detail-body" class="db-row-detail-body"></div>
+                </div>
+            </div>
+
+            <!-- TAB 3: TOOLS & CONTEXT -->
+            <div id="db-panel-runtime" class="db-tab-panel">
+                <div class="db-runtime-grid">
+                    <article class="metric-card">
+                        <div class="metric-header">
+                            <span>Mounted Agent Tools</span>
+                            <span class="metric-unit" id="db-tools-badge">0 LOADED</span>
+                        </div>
+                        <div id="db-tools-list" class="db-runtime-list">Loading...</div>
+                    </article>
+
+                    <article class="metric-card">
+                        <div class="metric-header">
+                            <span>Configured Local Models</span>
+                            <span class="metric-unit" id="db-models-badge">GGUF</span>
+                        </div>
+                        <div id="db-models-list" class="db-runtime-list">Loading...</div>
+                    </article>
+                </div>
+
+                <article class="metric-card" style="margin-top: 14px;">
+                    <div class="metric-header">
+                        <span>Active System Personality Prompt</span>
+                        <div class="db-prompt-meta">
+                            <span class="metric-unit" id="db-personality-model">--</span>
+                            <button id="db-copy-personality" class="db-ghost-btn" type="button">Copy</button>
+                        </div>
+                    </div>
+                    <pre id="db-personality-preview" class="db-personality-preview">Loading...</pre>
+                </article>
             </div>
 
         </section>

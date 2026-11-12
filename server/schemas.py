@@ -51,3 +51,20 @@ class SwitchModelRequest(BaseModel):
 class SummarizeRequest(BaseModel):
     conversation_id: int
     model: str | None = None
+
+
+class CreateMemoryRequest(BaseModel):
+    category: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=4000)
+    importance: int = Field(default=3, ge=1, le=5)
+    pinned: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    source: str | None = "manual"
+
+
+class UpdateMemoryRequest(BaseModel):
+    category: str | None = None
+    content: str | None = Field(default=None, min_length=1, max_length=4000)
+    importance: int | None = Field(default=None, ge=1, le=5)
+    pinned: bool | None = None
+    tags: list[str] | None = Field(default=None, max_length=20)
