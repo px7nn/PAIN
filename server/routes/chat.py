@@ -1,10 +1,12 @@
+import asyncio
 import json
+import threading
 
-from fastapi           import APIRouter, Request, HTTPException
+from fastapi           import APIRouter, Body, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from core.engine    import Engine, EngineError
-from server.schemas import ChatRequest, SummarizeRequest
+from server.schemas import ChatRequest, StopChatRequest, SummarizeRequest
 
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
@@ -41,7 +43,7 @@ def chat(payload: ChatRequest, request: Request):
 
 
 @router.post("/stream")
-def stream_chat(payload: ChatRequest, request: Request):
+async def stream_chat(payload: ChatRequest, request: Request):
     engine = get_engine_from_request(request)
 
     # Create the conversation before streaming so its ID
@@ -59,40 +61,79 @@ def stream_chat(payload: ChatRequest, request: Request):
 
     model_name = payload.model or engine.current_model
     attachments = [att.model_dump() for att in payload.attachments]
+    request_id = payload.request_id
 
-    def generate():
-        metadata = {
-            "type": "start",
-            "conversation_id": conversation_id,
-            "model": model_name
-        }
+    cancel_event = threading.Event()
+    engine.register_stream(cancel_event, request_id=request_id)
 
-        yield f"data: {json.dumps(metadata)}\n\n"
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, str | None]] = asyncio.Queue()
 
+    def push(kind: str, value: str | None):
         try:
+            loop.call_soon_threadsafe(queue.put_nowait, (kind, value))
+        except RuntimeError:
+            pass
+
+    def worker():
+        try:
+            metadata = {
+                "type": "start",
+                "conversation_id": conversation_id,
+                "model": model_name
+            }
+            push("data", f"data: {json.dumps(metadata)}\n\n")
+
             for event in engine.stream(
                 message=payload.message,
                 conversation_id=conversation_id,
                 model=model_name,
-                attachments=attachments
+                attachments=attachments,
+                cancel_event=cancel_event,
+                request_id=request_id
             ):
-                yield f"data: {json.dumps(event, default=str)}\n\n"
+                if cancel_event.is_set():
+                    break
+                push("data", f"data: {json.dumps(event, default=str)}\n\n")
 
-            # Emit live real-time context token metrics immediately upon completion
-            try:
-                metrics = engine.get_context_metrics(conversation_id, model_name)
-                yield f"data: {json.dumps({'type': 'context_metrics', 'context': metrics}, default=str)}\n\n"
-            except Exception:
-                pass
+            if not cancel_event.is_set():
+                try:
+                    metrics = engine.get_context_metrics(conversation_id, model_name)
+                    push("data", f"data: {json.dumps({'type': 'context_metrics', 'context': metrics}, default=str)}\n\n")
+                except Exception:
+                    pass
 
-            yield 'data: {"type":"done"}\n\n'
+                push("data", 'data: {"type":"done"}\n\n')
 
         except Exception as exc:
-            event = {
-                "type": "error",
-                "message": str(exc)
-            }
-            yield f"data: {json.dumps(event)}\n\n"
+            if not cancel_event.is_set():
+                event = {
+                    "type": "error",
+                    "message": str(exc)
+                }
+                push("data", f"data: {json.dumps(event)}\n\n")
+        finally:
+            engine.unregister_stream(cancel_event)
+            push("end", None)
+
+    worker_thread = threading.Thread(target=worker, daemon=True)
+    worker_thread.start()
+
+    async def generate():
+        try:
+            while True:
+                kind, value = await queue.get()
+                if kind == "end":
+                    break
+                if cancel_event.is_set():
+                    break
+                if value is not None:
+                    yield value
+        except asyncio.CancelledError:
+            engine.cancel_stream(cancel_event)
+            raise
+        finally:
+            engine.cancel_stream(cancel_event)
 
     return StreamingResponse(
         generate(),
@@ -103,6 +144,18 @@ def stream_chat(payload: ChatRequest, request: Request):
             "X-Accel-Buffering": "no"
         }
     )
+
+
+@router.post("/stop")
+def stop_chat(
+    request: Request,
+    payload: StopChatRequest | None = Body(default=None)
+):
+    """Immediately cancel the active streaming generation and free the model slot."""
+    engine = get_engine_from_request(request)
+    req_id = payload.request_id if payload is not None else None
+    stopped = engine.stop_active_stream(request_id=req_id)
+    return {"ok": True, "stopped": stopped}
 
 
 @router.get("/context")

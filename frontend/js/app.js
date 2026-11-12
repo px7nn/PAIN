@@ -7,6 +7,7 @@ let activeConversation = null;
 let activePage = "chat";
 let isGenerating = false;
 let abortController = null;
+let activeRequestId = null;
 let systemTimer = null;
 let activeToolActivities = new Map();
 let previousModel = "";
@@ -1662,9 +1663,19 @@ function setSendButtonMode(generating) {
 }
 
 function stopGeneration() {
+    const reqId = activeRequestId;
     if (abortController) {
         abortController.abort();
-        abortController = null;
+    }
+    if (reqId) {
+        fetch(API + "/chat/stop", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ request_id: reqId }),
+            keepalive: true
+        }).catch(() => {});
     }
 }
 
@@ -1745,7 +1756,12 @@ async function sendMessage(text, attachments = []) {
     const model = $("model-selector").value;
     $("model-status").textContent = "Generating...";
 
-    abortController = new AbortController();
+    const requestId = (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function")
+        ? crypto.randomUUID()
+        : `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const requestAbort = new AbortController();
+    activeRequestId = requestId;
+    abortController = requestAbort;
 
     try {
         const response = await fetch(API + "/chat/stream", {
@@ -1757,9 +1773,10 @@ async function sendMessage(text, attachments = []) {
                 message: text,
                 conversation_id: activeConversation,
                 model: model || undefined,
+                request_id: requestId,
                 attachments: cleanAttachments
             }),
-            signal: abortController.signal
+            signal: requestAbort.signal
         });
 
         if (!response.ok) {
@@ -1948,12 +1965,22 @@ async function sendMessage(text, attachments = []) {
         await loadConversations();
 
     } catch (error) {
-        if (error.name === "AbortError" || abortController?.signal?.aborted) {
+        if (error.name === "AbortError" || requestAbort.signal.aborted) {
             $("model-status").textContent = "Stopped";
             const turn = getOrCreateAssistantTurn();
-            const targetEl = turn.postToolEl || turn.preToolEl;
-            if (targetEl) {
-                targetEl.innerHTML += renderMarkdown("\n\n*[Generation stopped]*");
+            const stoppedNote = "*[Generation stopped]*";
+            if (turn.hasTools && turn.postToolEl) {
+                turn.postToolText += `\n\n${stoppedNote}`;
+                turn.postToolEl.innerHTML = renderMarkdown(turn.postToolText, false);
+            } else if (turn.preToolEl) {
+                turn.preToolText += `\n\n${stoppedNote}`;
+                turn.preToolEl.innerHTML = renderMarkdown(turn.preToolText, false);
+            } else {
+                turn.preToolEl = document.createElement("div");
+                turn.preToolEl.className = "message-content pre-tool-content";
+                turn.preToolText = stoppedNote;
+                turn.preToolEl.innerHTML = renderMarkdown(stoppedNote, false);
+                turn.bodyEl.appendChild(turn.preToolEl);
             }
         } else {
             $("model-status").textContent = "Error";
@@ -1965,7 +1992,13 @@ async function sendMessage(text, attachments = []) {
         }
     } finally {
         isGenerating = false;
-        abortController = null;
+        streamingOutputTokens = 0;
+        if (abortController === requestAbort) {
+            abortController = null;
+        }
+        if (activeRequestId === requestId) {
+            activeRequestId = null;
+        }
 
         if (currentTurn.preToolEl && currentTurn.preToolText) {
             currentTurn.preToolEl.innerHTML = renderMarkdown(currentTurn.preToolText, false);

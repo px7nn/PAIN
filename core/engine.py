@@ -1,6 +1,9 @@
+import http.client
 import json
+import socket
 import threading
 
+from urllib.parse   import urlsplit
 from urllib.request import Request, urlopen
 from urllib.error   import HTTPError, URLError
 
@@ -54,7 +57,75 @@ class Engine:
         # Serialize inference and model switching
         self.lock = threading.RLock()
 
+        # Track active streaming requests for immediate cancellation
+        self._streams_lock = threading.Lock()
+        self._active_streams: dict[int, dict] = {}
+
         self._closed = False
+
+    def register_stream(
+        self,
+        cancel_event: threading.Event,
+        request_id: str | None = None
+    ) -> int:
+        key = id(cancel_event)
+        with self._streams_lock:
+            self._active_streams.setdefault(
+                key,
+                {
+                    "cancel_event": cancel_event,
+                    "request_id": request_id,
+                    "sock": None,
+                }
+            )
+        return key
+
+    def unregister_stream(self, cancel_event: threading.Event):
+        key = id(cancel_event)
+        with self._streams_lock:
+            self._active_streams.pop(key, None)
+
+    def _set_stream_socket(self, cancel_event: threading.Event | None, sock):
+        if cancel_event is None:
+            return
+        key = id(cancel_event)
+        with self._streams_lock:
+            entry = self._active_streams.get(key)
+            if entry is not None:
+                entry["sock"] = sock
+
+    def cancel_stream(self, cancel_event: threading.Event | None):
+        if cancel_event is None:
+            return
+        cancel_event.set()
+        key = id(cancel_event)
+        with self._streams_lock:
+            entry = self._active_streams.get(key)
+            sock = entry.get("sock") if entry is not None else None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+
+    def stop_active_stream(self, request_id: str | None = None) -> bool:
+        with self._streams_lock:
+            targets = []
+            for entry in self._active_streams.values():
+                if request_id is None or entry.get("request_id") == request_id:
+                    targets.append((entry.get("cancel_event"), entry.get("sock")))
+
+        stopped = False
+        for cancel_event, sock in targets:
+            if cancel_event is not None:
+                cancel_event.set()
+                stopped = True
+            if sock is not None:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+        return stopped
 
     # --------------------------------------------------
     # MODEL MANAGEMENT
@@ -231,20 +302,24 @@ class Engine:
         self,
         messages: list[dict],
         model_name: str,
-        tools: list[dict] | None = None
+        tools: list[dict] | None = None,
+        cancel_event: threading.Event | None = None
     ):
+        if cancel_event is not None and cancel_event.is_set():
+            return
+
         inference = self.config.inference
 
         payload = {
             "model"    : model_name,
             "messages" : messages,
-            
+
             "temperature" : inference.temperature,
             "top_p"       : inference.top_p,
             "top_k"       : inference.top_k,
             "min_p"       : inference.min_p,
             "max_tokens"  : inference.max_tokens,
-            
+
             "stream": True
         }
 
@@ -255,59 +330,95 @@ class Engine:
 
         body = json.dumps(payload).encode("utf-8")
 
-        request = Request(
-            f"{self.models.base_url}/v1/chat/completions",
-            data=body,
-            headers={
-                "Content-Type": "application/json"
-            },
-            method="POST"
+        parsed = urlsplit(self.models.base_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        endpoint = f"{parsed.path.rstrip('/')}/v1/chat/completions"
+
+        conn_cls = (
+            http.client.HTTPSConnection
+            if parsed.scheme == "https"
+            else http.client.HTTPConnection
         )
+        conn = conn_cls(host, port, timeout=600)
+        response = None
 
         try:
-            with urlopen(request, timeout=600) as response:
-                for line in response:
-                    line = line.decode("utf-8").strip()
+            conn.connect()
+            self._set_stream_socket(cancel_event, conn.sock)
 
-                    if not line.startswith("data:"):
-                        continue
+            if cancel_event is not None and cancel_event.is_set():
+                return
 
-                    data = line[5:].strip()
-
-                    if data == "[DONE]":
-                        break
-
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-
-                    choices = chunk.get("choices", [])
-
-                    if not choices:
-                        if chunk.get("usage"):
-                            yield {"usage": chunk["usage"]}
-                        continue
-
-                    choice = choices[0]
-                    yield {
-                        "delta": choice.get("delta") or {},
-                        "finish_reason": choice.get("finish_reason"),
-                        "usage": chunk.get("usage", {})
-                    }
-
-        except HTTPError as exc:
-            error_body = exc.read().decode(
-                "utf-8",
-                errors="replace"
+            conn.request(
+                "POST",
+                endpoint,
+                body=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Connection": "close",
+                }
             )
-            raise EngineError(f"llama-server returned HTTP {exc.code}: {error_body}") from exc
+            response = conn.getresponse()
 
-        except URLError as exc:
-            raise EngineError(f"Unable to connect to llama-server: {exc.reason}") from exc
+            if response.status >= 400:
+                error_body = response.read().decode("utf-8", errors="replace")
+                raise EngineError(f"llama-server returned HTTP {response.status}: {error_body}")
+
+            for raw_line in response:
+                if cancel_event is not None and cancel_event.is_set():
+                    break
+
+                line = raw_line.decode("utf-8", errors="replace").strip()
+
+                if not line.startswith("data:"):
+                    continue
+
+                data = line[5:].strip()
+
+                if data == "[DONE]":
+                    break
+
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                choices = chunk.get("choices", [])
+
+                if not choices:
+                    if chunk.get("usage"):
+                        yield {"usage": chunk["usage"]}
+                    continue
+
+                choice = choices[0]
+                yield {
+                    "delta": choice.get("delta") or {},
+                    "finish_reason": choice.get("finish_reason"),
+                    "usage": chunk.get("usage", {})
+                }
 
         except TimeoutError as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                return
             raise EngineError("Streaming request timed out.") from exc
+
+        except (http.client.HTTPException, OSError) as exc:
+            if cancel_event is not None and cancel_event.is_set():
+                return
+            raise EngineError(f"Unable to connect to llama-server: {exc}") from exc
+
+        finally:
+            self._set_stream_socket(cancel_event, None)
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # --------------------------------------------------
     # CHAT
@@ -393,7 +504,9 @@ class Engine:
         message: str = "",
         conversation_id: int | None = None,
         model: str | None = None,
-        attachments: list[dict] | None = None
+        attachments: list[dict] | None = None,
+        cancel_event: threading.Event | None = None,
+        request_id: str | None = None
     ):
         cleaned_attachments = [
             att for att in (attachments or [])
@@ -402,50 +515,72 @@ class Engine:
         if not isinstance(message, str) or (not message.strip() and not cleaned_attachments):
             raise EngineError("Message cannot be empty.")
 
-        with self.lock:
-            if self._closed:
-                raise EngineError("Engine is closed.")
+        cancel_event = cancel_event or threading.Event()
+        self.register_stream(cancel_event, request_id=request_id)
 
-            model_name = model or self.current_model
-            self.config.get_model(model_name)
+        try:
+            if cancel_event.is_set():
+                return
 
-            if conversation_id is None:
-                conversation_id = self.create_conversation()
-            elif not self.conversations.get_conversation(conversation_id):
-                raise EngineError(f"Conversation not found: {conversation_id}")
+            with self.lock:
+                if self._closed:
+                    raise EngineError("Engine is closed.")
 
-            self._ensure_model(model_name)
-            self.conversations.add_message(
-                conversation_id,
-                "user",
-                message,
-                attachments=cleaned_attachments or None
-            )
+                if cancel_event.is_set():
+                    return
 
-            context = self._build_context(conversation_id, model_name)
+                model_name = model or self.current_model
+                self.config.get_model(model_name)
 
-            response_parts = []
-            completed = False
+                if conversation_id is None:
+                    conversation_id = self.create_conversation()
+                elif not self.conversations.get_conversation(conversation_id):
+                    raise EngineError(f"Conversation not found: {conversation_id}")
 
-            try:
-                for event in self.agent.stream(
-                    messages=context.messages,
-                    model_name=model_name
-                ):
-                    if event.get("type") == "token":
-                        response_parts.append(event.get("content", ""))
-                    yield event
+                self._ensure_model(model_name)
+                if cancel_event.is_set():
+                    return
 
-                completed = True
+                self.conversations.add_message(
+                    conversation_id,
+                    "user",
+                    message,
+                    attachments=cleaned_attachments or None
+                )
 
-            finally:
-                if completed and response_parts:
-                    self.conversations.add_message(
-                        conversation_id,
-                        "assistant",
-                        "".join(response_parts),
-                        model=model_name
-                    )
+                context = self._build_context(conversation_id, model_name)
+                if cancel_event.is_set():
+                    return
+
+                response_parts = []
+                completed = False
+
+                try:
+                    for event in self.agent.stream(
+                        messages=context.messages,
+                        model_name=model_name,
+                        cancel_event=cancel_event
+                    ):
+                        if cancel_event.is_set():
+                            break
+                        if event.get("type") == "token":
+                            response_parts.append(event.get("content", ""))
+                        yield event
+
+                    if not cancel_event.is_set():
+                        completed = True
+
+                finally:
+                    partial_text = "".join(response_parts)
+                    if (completed or cancel_event.is_set()) and partial_text.strip():
+                        self.conversations.add_message(
+                            conversation_id,
+                            "assistant",
+                            partial_text,
+                            model=model_name
+                        )
+        finally:
+            self.unregister_stream(cancel_event)
 
     # --------------------------------------------------
     # CONTEXT METRICS & SUMMARIZATION
@@ -600,6 +735,7 @@ class Engine:
     # --------------------------------------------------
 
     def close(self):
+        self.stop_active_stream()
         with self.lock:
             if self._closed:
                 return

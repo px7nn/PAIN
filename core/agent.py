@@ -1,3 +1,4 @@
+import inspect
 import json
 
 from dataclasses import dataclass
@@ -182,7 +183,12 @@ class Agent:
     # STREAMING EXECUTION
     # --------------------------------------------------
 
-    def stream(self, messages: list[dict], model_name: str):
+    def stream(
+        self,
+        messages: list[dict],
+        model_name: str,
+        cancel_event=None
+    ):
         if not isinstance(messages, list) or not messages:
             raise AgentError("Messages must be a non-empty list.")
 
@@ -193,17 +199,40 @@ class Agent:
         available_tools = self.tool_manager.get_tools()
         total_calls = 0
 
+        supports_cancel = False
+        try:
+            sig = inspect.signature(self.generate_stream)
+            supports_cancel = (
+                "cancel_event" in sig.parameters
+                or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()
+                )
+            )
+        except (TypeError, ValueError):
+            supports_cancel = False
+
         for _ in range(self.max_tool_rounds + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                return
+
             round_content = ""
             round_reasoning = ""
             last_finish_reason = None
             tool_calls = {}
 
-            for chunk in self.generate_stream(
-                messages=messages,
-                model_name=model_name,
-                tools=available_tools
-            ):
+            stream_kwargs = {
+                "messages": messages,
+                "model_name": model_name,
+                "tools": available_tools,
+            }
+            if supports_cancel and cancel_event is not None:
+                stream_kwargs["cancel_event"] = cancel_event
+
+            for chunk in self.generate_stream(**stream_kwargs):
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+
                 if chunk.get("finish_reason"):
                     last_finish_reason = chunk.get("finish_reason")
 
@@ -235,6 +264,9 @@ class Agent:
                     if function.get("arguments"):
                         current["function"]["arguments"] += function["arguments"]
 
+            if cancel_event is not None and cancel_event.is_set():
+                return
+
             if not tool_calls:
                 if not round_content and round_reasoning:
                     yield {"type": "token", "content": round_reasoning}
@@ -250,6 +282,9 @@ class Agent:
             })
 
             for tool_call in assembled_calls:
+                if cancel_event is not None and cancel_event.is_set():
+                    return
+
                 call_id = tool_call.get("id")
                 if not isinstance(call_id, str) or not call_id:
                     raise AgentError("Streamed tool call has no valid ID.")
@@ -282,6 +317,9 @@ class Agent:
                         result = self.tool_manager.execute(name, arguments)
 
                     total_calls += 1
+
+                if cancel_event is not None and cancel_event.is_set():
+                    return
 
                 yield {
                     "type": "tool_result",

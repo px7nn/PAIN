@@ -18,6 +18,7 @@ class ChatRequest(BaseModel):
     message: str = ""
     conversation_id: int | None = None
     model: str | None = None
+    request_id: str | None = None
     attachments: list[AttachmentPayload] = Field(default_factory=list, max_length=10)
 
     @model_validator(mode="after")
@@ -25,6 +26,10 @@ class ChatRequest(BaseModel):
         if not self.message.strip() and not self.attachments:
             raise ValueError("Message or at least one attachment is required.")
         return self
+
+
+class StopChatRequest(BaseModel):
+    request_id: str | None = None
 
 
 class CreateConversationRequest(BaseModel):
