@@ -3874,6 +3874,14 @@ summary.tool-activity-summary:hover {
     .database-page.active {
         display: flex;
         flex-direction: column;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        min-height: 0;
+        flex: 1;
+    }
+
+    .database-page > * {
+        flex-shrink: 0;
     }
 
     .database-page .system-heading {
@@ -3881,6 +3889,7 @@ summary.tool-activity-summary:hover {
         flex-direction: column;
         align-items: flex-start;
         gap: 6px;
+        flex-shrink: 0;
     }
 
     .db-header-actions {
@@ -3910,14 +3919,18 @@ summary.tool-activity-summary:hover {
     .database-page .db-tab-bar {
         order: 2;
         margin-top: 2px;
+        flex-shrink: 0;
     }
 
     .database-page .db-tab-panel {
         order: 3;
+        flex-shrink: 0;
+        min-height: fit-content;
     }
 
     .database-page .db-kpi-grid {
         order: 4;
+        flex-shrink: 0;
         margin-top: 14px;
         padding-top: 12px;
         border-top: 1px solid rgba(255, 255, 255, 0.06);
@@ -3974,20 +3987,23 @@ summary.tool-activity-summary:hover {
 
     .db-tab-bar {
         display: flex;
-        gap: 5px;
+        gap: 4px;
         padding-bottom: 6px;
         border-bottom: 1px solid rgba(255, 255, 255, 0.06);
         width: 100%;
-        overflow-x: auto;
-        scrollbar-width: none;
+        box-sizing: border-box;
+        overflow-x: visible;
     }
 
     .db-tab-btn {
-        flex: 1;
+        flex: 1 1 0;
+        min-width: 0;
         text-align: center;
         justify-content: center;
-        font-size: 10.5px;
-        padding: 6px 4px;
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 500;
+        padding: 6px 2px;
         white-space: nowrap;
         border-radius: 5px;
     }
@@ -4263,17 +4279,19 @@ summary.tool-activity-summary:hover {
     #db-panel-runtime {
         min-width: 0;
         max-width: 100%;
-        overflow: hidden;
+        overflow: visible;
         gap: 10px;
     }
 
-    #db-panel-runtime > article.metric-card {
+    #db-panel-runtime > article.metric-card,
+    .db-runtime-grid > article.metric-card {
         margin-top: 0 !important;
         min-width: 0;
         max-width: 100%;
-        overflow: hidden;
+        overflow: visible;
         padding: 10px 12px;
         border-radius: 7px;
+        box-sizing: border-box;
     }
 
     #db-panel-runtime .metric-header {
@@ -4320,7 +4338,8 @@ summary.tool-activity-summary:hover {
     }
 
     .db-runtime-grid {
-        grid-template-columns: 1fr;
+        display: flex;
+        flex-direction: column;
         gap: 10px;
         min-width: 0;
         max-width: 100%;
@@ -4336,12 +4355,9 @@ summary.tool-activity-summary:hover {
     }
 
     #db-tools-list {
-        max-height: 340px;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
-        padding-right: 2px;
+        max-height: none;
+        overflow-y: visible;
+        padding-right: 0;
     }
 
     .db-runtime-item {
