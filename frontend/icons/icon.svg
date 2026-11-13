@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="PAIN logo">
+  <defs>
+    <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="870" y1="440" x2="470" y2="815">
+      <stop offset="0" stop-color="#CDAFF2"/>
+      <stop offset="0.29" stop-color="#B686F6"/>
+      <stop offset="0.49" stop-color="#9E61F6"/>
+      <stop offset="0.74" stop-color="#8D49FC"/>
+      <stop offset="0.9" stop-color="#6E24FE"/>
+      <stop offset="1" stop-color="#6A1FFF"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#g)" transform="translate(512 512) scale(1.5) translate(-659.5 -627.5)">
+    <!-- upper-left stroke piece (cracked edge) -->
+    <path d="M606 441 L689 440 L630 567 L576 585 L567 607 L551 603 L546 614 L541 619 L510 642 Z"/>
+    <!-- lower-left stroke piece -->
+    <path d="M617 594 L585 599 L574 624 L556 618 L551 627 L506 649 L429 815 L513 815 Z"/>
+    <!-- P body with counter -->
+    <path fill-rule="evenodd" d="M711 443 H790 A100 122.5 0 0 1 790 688 H687 L628 815 H541 L637 606 H776 A33 43.5 0 0 0 776 519 H676 Z"/>
+  </g>
+</svg>
