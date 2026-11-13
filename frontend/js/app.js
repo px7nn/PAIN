@@ -793,7 +793,17 @@ function showPage(page) {
     }
 
     toggleSidebar(false);
+    if (window.location.hash !== `#${page}`) {
+        history.replaceState(null, "", `#${page}`);
+    }
 }
+
+window.addEventListener("hashchange", () => {
+    const hash = window.location.hash.replace("#", "").trim();
+    if (["chat", "system", "database", "settings"].includes(hash) && hash !== activePage) {
+        showPage(hash);
+    }
+});
 
 document.querySelectorAll(".nav-item").forEach(button => {
     button.addEventListener("click", () => {
@@ -3263,7 +3273,53 @@ document.addEventListener("click", (e) => {
 // INITIALIZATION
 // --------------------------------------------------
 
+function updateResponsivePlaceholders() {
+    const isMobile = window.matchMedia("(max-width: 650px)").matches;
+    const msgInput = $("message-input");
+    if (msgInput) {
+        msgInput.placeholder = "Ask PAIN";
+    }
+    const memSearch = $("mem-search-input");
+    if (memSearch) {
+        memSearch.placeholder = isMobile
+            ? "Search memories..."
+            : "Search memories by content, tag, or #id...";
+    }
+    const dbSearch = $("db-table-search");
+    if (dbSearch) {
+        dbSearch.placeholder = isMobile
+            ? "Filter rows..."
+            : "Filter rows in selected table...";
+    }
+    const memContent = $("mem-input-content");
+    if (memContent) {
+        memContent.placeholder = isMobile
+            ? "Fact, preference, or detail to remember..."
+            : "Fact, preference, project detail, or instruction for PAIN to remember...";
+    }
+}
+
+try {
+    const mobileMql = window.matchMedia("(max-width: 650px)");
+    if (mobileMql.addEventListener) {
+        mobileMql.addEventListener("change", updateResponsivePlaceholders);
+    } else if (mobileMql.addListener) {
+        mobileMql.addListener(updateResponsivePlaceholders);
+    }
+} catch (_) {}
+
+// Immediately show page if hash is present
+(function checkEarlyHash() {
+    try {
+        const h = window.location.hash.replace("#", "").trim();
+        if (["system", "database", "settings"].includes(h)) {
+            showPage(h);
+        }
+    } catch (_) {}
+})();
+
 async function initialize() {
+    updateResponsivePlaceholders();
     updateConnectionStatus("connecting");
 
     try {
@@ -3279,6 +3335,11 @@ async function initialize() {
             $("model-status").textContent = "Loaded";
         } else {
             $("model-status").textContent = "Ready";
+        }
+
+        const initialHash = window.location.hash.replace("#", "").trim();
+        if (["system", "database", "settings"].includes(initialHash)) {
+            showPage(initialHash);
         }
     } catch (error) {
         updateConnectionStatus("disconnected");

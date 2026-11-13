@@ -6,6 +6,8 @@
 
     <title>PAIN</title>
 
+    <link rel="manifest" href="/static/manifest.json">
+
     <link rel="stylesheet" href="/static/css/vendor/katex.min.css">
     <link rel="stylesheet" href="/static/css/vendor/github-dark.min.css">
     <link rel="stylesheet" href="/static/css/style.css">
@@ -157,7 +159,7 @@
                     <div class="composer-input-row">
                         <textarea
                             id="message-input"
-                            placeholder="Message PAIN, paste with Ctrl+V, or drop files (images, PDF, DOCX, Markdown, legacy)..."
+                            placeholder="Ask PAIN"
                             rows="1"
                         ></textarea>
                     </div>
@@ -542,7 +544,7 @@
             <div id="db-panel-memories" class="db-tab-panel active">
                 <div class="db-toolbar">
                     <div class="db-toolbar-left">
-                        <input id="mem-search-input" class="db-search-input" type="search" placeholder="Search memories by content, tag, or #id...">
+                        <input id="mem-search-input" class="db-search-input" type="search" placeholder="Search memories..." data-desktop-placeholder="Search memories by content, tag, or #id...">
                         <div class="db-filter-pills" id="mem-category-filters">
                             <button class="db-filter-pill active" data-category="" type="button">All</button>
                         </div>
@@ -616,7 +618,7 @@
 
                 <div class="db-toolbar">
                     <div class="db-toolbar-left">
-                        <input id="db-table-search" class="db-search-input" type="search" placeholder="Filter rows in selected table...">
+                        <input id="db-table-search" class="db-search-input" type="search" placeholder="Filter rows..." data-desktop-placeholder="Filter rows in selected table...">
                         <span id="db-table-count-label" class="db-meta-label">0 rows</span>
                     </div>
                     <div class="db-toolbar-right">
